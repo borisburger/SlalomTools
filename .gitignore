@@ -172,3 +172,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+backend/rankings/
+frontend/node_modules/
+frontend/build/
+backend/google_secrets.json
+backend/google_token_cache.json
+backend/secrets.json
+backend/token_cache.json
