@@ -1,0 +1,17 @@
+{
+    "paths": {
+        "static_dir": "static",
+        "default_data_file": "data.xlsx",
+        "default_background_image": "pozadie_TV_bez.png"
+    },
+    "style": {
+        "fontFamily": "Arial, sans-serif",
+        "textColor": "#FFFFFF",
+        "backgroundColor": "#000000",
+        "primaryColor": "#3333AA",
+        "secondaryColor": "#FFFFFF",
+        "publicDisplayLimit": 8
+    },
+    "default_excel_url": "https://1drv.ms/x/c/030ab5aec14c86ea/EZpmTzicDuJPtUiu8oyL2toBkGxvGfv7vP41jSqIMUcFSA?e=wizGIS",
+    "worldSkateRankingsUrl": "https://app-69b8883b-99d4-4935-9b2b-704880862424.cleverapps.io"
+} 
