@@ -33,6 +33,15 @@ const DISPLAY_PRESETS = {
       noWorldSkateId: true,
       minAge: 10
     }
+  },
+  "skaters_with_ws_id": {
+    name: "Skaters with WS ID",
+    columns: ["world_skate_id", "national_federation_id", "first_name", "family_name", "sex", "dob", "nationality"],
+    showOrder: false,
+    specialFilters: {
+      hasWorldSkateId: true,
+      minAge: 10
+    }
   }
 };
 
@@ -577,6 +586,18 @@ function RegistrationPage() {
       console.log("After filtering out skaters with World Skate ID:", filtered.length);
     }
     
+    // Filter to include only skaters with world_skate_id
+    if (specialFilters.hasWorldSkateId) {
+      filtered = filtered.filter(skater => {
+        const hasId = !!skater.world_skate_id;
+        if (!hasId) {
+          console.log(`Excluding skater without ID: ${skater.full_name}`);
+        }
+        return hasId;
+      });
+      console.log("After filtering to include only skaters with World Skate ID:", filtered.length);
+    }
+    
     // Filter by minimum age
     if (specialFilters.minAge) {
       filtered = filtered.filter(skater => {
@@ -868,15 +889,36 @@ function RegistrationPage() {
             cellContent = "";
           }
           
+          // Special case for national_federation_id (empty for now)
+          if (column === "national_federation_id") {
+            cellContent = "";
+          }
+          
           // Special case for first_name and family_name (split from full_name)
           if (column === "first_name" && !skater.first_name) {
             const nameParts = (skater.full_name || "").split(" ");
             cellContent = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+            
+            // Apply transliteration for specific presets
+            if (displayPreset === "new_skaters" || displayPreset === "skaters_with_ws_id") {
+              cellContent = transliterateText(cellContent);
+            }
           }
           
           if (column === "family_name" && !skater.family_name) {
             const nameParts = (skater.full_name || "").split(" ");
             cellContent = nameParts.length > 0 ? nameParts[0] : "";
+            
+            // Apply transliteration for specific presets
+            if (displayPreset === "new_skaters" || displayPreset === "skaters_with_ws_id") {
+              cellContent = transliterateText(cellContent);
+            }
+          }
+          
+          // Apply transliteration to existing first_name and family_name fields for specific presets
+          if ((column === "first_name" || column === "family_name") && cellContent && 
+              (displayPreset === "new_skaters" || displayPreset === "skaters_with_ws_id")) {
+            cellContent = transliterateText(cellContent);
           }
           
           // Special case for sex (display as "man" or "woman")
@@ -1280,8 +1322,25 @@ function RegistrationPage() {
         return sortDirection === "asc" ? ageA - ageB : ageB - ageA;
       } else if (sortColumn === "full_name" || sortColumn === "first_name" || sortColumn === "family_name") {
         // String comparison for name fields
-        const valueA = (a[sortColumn] || "").toLowerCase();
-        const valueB = (b[sortColumn] || "").toLowerCase();
+        let valueA, valueB;
+        
+        if (sortColumn === "first_name") {
+          // Derive first name from full_name (same logic as cell content)
+          const namePartsA = (a.full_name || "").split(" ");
+          const namePartsB = (b.full_name || "").split(" ");
+          valueA = (a.first_name || (namePartsA.length > 1 ? namePartsA.slice(1).join(" ") : "")).toLowerCase();
+          valueB = (b.first_name || (namePartsB.length > 1 ? namePartsB.slice(1).join(" ") : "")).toLowerCase();
+        } else if (sortColumn === "family_name") {
+          // Derive family name from full_name (same logic as cell content)
+          const namePartsA = (a.full_name || "").split(" ");
+          const namePartsB = (b.full_name || "").split(" ");
+          valueA = (a.family_name || (namePartsA.length > 0 ? namePartsA[0] : "")).toLowerCase();
+          valueB = (b.family_name || (namePartsB.length > 0 ? namePartsB[0] : "")).toLowerCase();
+        } else {
+          // full_name - use directly
+          valueA = (a[sortColumn] || "").toLowerCase();
+          valueB = (b[sortColumn] || "").toLowerCase();
+        }
         
         if (valueA < valueB) return sortDirection === "asc" ? -1 : 1;
         if (valueA > valueB) return sortDirection === "asc" ? 1 : -1;
@@ -1497,6 +1556,73 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
     normalized = normalized.trim().replace(/\s+/g, ' ');
     
     return normalized;
+  };
+
+  // Function to transliterate text while preserving case - for display purposes
+  const transliterateText = (text) => {
+    if (!text) return '';
+    
+    // Replace accented characters with non-accented equivalents using NFD normalization
+    // This handles most accented Latin characters while preserving case
+    let transliterated = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    
+    // Handle special characters that don't decompose properly with NFD
+    // Case-sensitive transliteration table
+    const transliterations = {
+      // Lowercase special character pairs
+      'æ': 'ae', 'œ': 'oe', 'ø': 'o', 'ö': 'o', 'ő': 'o',
+      'å': 'a', 'ä': 'a', 'â': 'a', 'à': 'a', 'á': 'a',
+      'ë': 'e', 'ê': 'e', 'è': 'e', 'é': 'e', 'ę': 'e',
+      'ï': 'i', 'î': 'i', 'ì': 'i', 'í': 'i',
+      'ü': 'u', 'û': 'u', 'ù': 'u', 'ú': 'u', 'ű': 'u',
+      'ÿ': 'y', 'ý': 'y',
+      'ß': 'ss', 'þ': 'th',
+      
+      // Uppercase special character pairs
+      'Æ': 'AE', 'Œ': 'OE', 'Ø': 'O', 'Ö': 'O', 'Ő': 'O',
+      'Å': 'A', 'Ä': 'A', 'Â': 'A', 'À': 'A', 'Á': 'A',
+      'Ë': 'E', 'Ê': 'E', 'È': 'E', 'É': 'E', 'Ę': 'E',
+      'Ï': 'I', 'Î': 'I', 'Ì': 'I', 'Í': 'I',
+      'Ü': 'U', 'Û': 'U', 'Ù': 'U', 'Ú': 'U', 'Ű': 'U',
+      'Ÿ': 'Y', 'Ý': 'Y',
+      'ẞ': 'SS', 'Þ': 'TH',
+      
+      // Lowercase Slavic/Eastern European
+      'č': 'c', 'ć': 'c', 'ċ': 'c',
+      'š': 's', 'ś': 's', 'ŝ': 's',
+      'ž': 'z', 'ź': 'z', 'ż': 'z',
+      'ň': 'n', 'ń': 'n', 'ñ': 'n',
+      'ř': 'r', 'ŕ': 'r', 'ŗ': 'r',
+      'ď': 'd', 'đ': 'd', 'ð': 'd',
+      'ť': 't', 'ț': 't', 'ŧ': 't',
+      'ł': 'l', 'ŀ': 'l',
+      
+      // Uppercase Slavic/Eastern European
+      'Č': 'C', 'Ć': 'C', 'Ċ': 'C',
+      'Š': 'S', 'Ś': 'S', 'Ŝ': 'S',
+      'Ž': 'Z', 'Ź': 'Z', 'Ż': 'Z',
+      'Ň': 'N', 'Ń': 'N', 'Ñ': 'N',
+      'Ř': 'R', 'Ŕ': 'R', 'Ŗ': 'R',
+      'Ď': 'D', 'Đ': 'D', 'Ð': 'D',
+      'Ť': 'T', 'Ț': 'T', 'Ŧ': 'T',
+      'Ł': 'L', 'Ŀ': 'L',
+      
+      // Other special characters
+      'ı': 'i', 'ȷ': 'j', 'ĸ': 'k',
+      'ŉ': 'n', 'ſ': 's', 
+      'ą': 'a', 'Ą': 'A'
+    };
+    
+    // Apply transliterations in a single pass by replacing each character
+    for (let i = 0; i < transliterated.length; i++) {
+      const char = transliterated[i];
+      if (transliterations[char]) {
+        transliterated = transliterated.substring(0, i) + transliterations[char] + transliterated.substring(i + 1);
+        i += transliterations[char].length - 1; // Adjust index to account for replacement length
+      }
+    }
+    
+    return transliterated;
   };
 
   // Search for potential matches in the skater database by name, birth date, and nationality
@@ -2362,6 +2488,7 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                     let headerText = column;
                     switch(column) {
                       case "world_skate_id": headerText = "WS ID"; break;
+                      case "national_federation_id": headerText = "Federation ID"; break;
                       case "full_name": headerText = "Name"; break;
                       case "first_name": headerText = "First Name"; break;
                       case "family_name": headerText = "Family Name"; break;
@@ -2386,6 +2513,7 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                     let minWidth = "auto";
                     switch(column) {
                       case "world_skate_id": minWidth = "180px"; break; // Use min-width to ensure full display
+                      case "national_federation_id": minWidth = "120px"; break;
                       case "full_name": minWidth = "200px"; break;
                       case "first_name": minWidth = "140px"; break;
                       case "family_name": minWidth = "140px"; break;
@@ -2510,15 +2638,36 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                         cellContent = "";
                       }
                       
+                      // Special case for national_federation_id (empty for now)
+                      if (column === "national_federation_id") {
+                        cellContent = "";
+                      }
+                      
                       // Special case for first_name and family_name (split from full_name)
                       if (column === "first_name" && !skater.first_name) {
                         const nameParts = (skater.full_name || "").split(" ");
                         cellContent = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "";
+                        
+                        // Apply transliteration for specific presets
+                        if (displayPreset === "new_skaters" || displayPreset === "skaters_with_ws_id") {
+                          cellContent = transliterateText(cellContent);
+                        }
                       }
                       
                       if (column === "family_name" && !skater.family_name) {
                         const nameParts = (skater.full_name || "").split(" ");
                         cellContent = nameParts.length > 0 ? nameParts[0] : "";
+                        
+                        // Apply transliteration for specific presets
+                        if (displayPreset === "new_skaters" || displayPreset === "skaters_with_ws_id") {
+                          cellContent = transliterateText(cellContent);
+                        }
+                      }
+                      
+                      // Apply transliteration to existing first_name and family_name fields for specific presets
+                      if ((column === "first_name" || column === "family_name") && cellContent && 
+                          (displayPreset === "new_skaters" || displayPreset === "skaters_with_ws_id")) {
+                        cellContent = transliterateText(cellContent);
                       }
                       
                       // Special case for sex (display as "man" or "woman")
@@ -2559,6 +2708,7 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                       let minWidth = "auto";
                       switch(column) {
                         case "world_skate_id": minWidth = "180px"; break; // Use min-width to ensure full display
+                        case "national_federation_id": minWidth = "120px"; break;
                         case "full_name": minWidth = "200px"; break;
                         case "first_name": minWidth = "140px"; break;
                         case "family_name": minWidth = "140px"; break;
