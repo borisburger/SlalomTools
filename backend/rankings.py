@@ -416,6 +416,7 @@ def fetch_skater_database(base_url=None):
         # Create output directory if it doesn't exist
         os.makedirs("rankings", exist_ok=True)
         output_file = "rankings/skater-db.json"
+        output_csv_file = "rankings/skater-db.csv"
         logging.info(f"Will save skater database to: {output_file}")
         
         # Create a session for better performance
@@ -506,6 +507,31 @@ def fetch_skater_database(base_url=None):
         # Save to file
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(skater_database, f, indent=2, ensure_ascii=False)
+
+        # Save CSV version for easier spreadsheet usage
+        csv_fields = [
+            "family_name",
+            "first_name",
+            "nationality",
+            "world_skate_id",
+            "birth_date",
+            "previous_ids",
+            "edit_url"
+        ]
+        with open(output_csv_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=csv_fields, quoting=csv.QUOTE_ALL)
+            writer.writeheader()
+            for skater in all_skaters:
+                previous_ids = skater.get("previous_ids", [])
+                writer.writerow({
+                    "family_name": skater.get("family_name", ""),
+                    "first_name": skater.get("first_name", ""),
+                    "nationality": skater.get("nationality", ""),
+                    "world_skate_id": skater.get("world_skate_id", ""),
+                    "birth_date": skater.get("birth_date", ""),
+                    "previous_ids": ";".join(str(pid) for pid in previous_ids) if isinstance(previous_ids, list) else str(previous_ids),
+                    "edit_url": skater.get("edit_url", "")
+                })
         
         # Log file size for debugging
         file_size = os.path.getsize(output_file) / (1024 * 1024)  # Size in MB
@@ -515,7 +541,7 @@ def fetch_skater_database(base_url=None):
         skater_db_progress["is_complete"] = True
         skater_db_progress["downloaded_skaters"] = total_skaters
         
-        logging.info(f"Successfully downloaded {total_skaters} skaters to {output_file}")
+        logging.info(f"Successfully downloaded {total_skaters} skaters to {output_file} and {output_csv_file}")
         return output_file
     
     except Exception as e:

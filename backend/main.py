@@ -145,6 +145,24 @@ async def api_download_skater_db():
         media_type="application/json"
     )
 
+@app.get("/api/skater-db/download-csv", response_class=FileResponse)
+async def api_download_skater_db_csv():
+    """
+    API endpoint to download the skater database CSV file
+    """
+    db_path = "rankings/skater-db.csv"
+    if not os.path.exists(db_path):
+        return JSONResponse(
+            status_code=404,
+            content={"status": "error", "message": "Skater database CSV not available. Please update the database first."}
+        )
+
+    return FileResponse(
+        path=db_path,
+        filename="skater-db.csv",
+        media_type="text/csv"
+    )
+
 @app.get("/api/skater-db/info-test")
 async def api_skater_db_info_test():
     """

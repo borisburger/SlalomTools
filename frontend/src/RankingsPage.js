@@ -782,6 +782,12 @@ const RankingsPage = () => {
     window.location.href = `${API_BASE}/api/skater-db/download`;
   };
 
+  // Function to download the skater database CSV file
+  const downloadSkaterDatabaseCsvFile = () => {
+    // Redirect the browser to the CSV download endpoint
+    window.location.href = `${API_BASE}/api/skater-db/download-csv`;
+  };
+
   // Initial data fetch
   useEffect(() => {
     fetchRankingsInfo();
@@ -1320,6 +1326,20 @@ const RankingsPage = () => {
                         disabled={isDownloadingSkaterDB}
                       >
                         Download Skater Database
+                      </button>
+
+                      <button 
+                        onClick={downloadSkaterDatabaseCsvFile}
+                        style={{
+                          ...styles.button, 
+                          marginLeft: '10px',
+                          background: '#20c997', // Teal color for CSV download
+                          opacity: isDownloadingSkaterDB ? 0.6 : 1,
+                          cursor: isDownloadingSkaterDB ? 'not-allowed' : 'pointer'
+                        }}
+                        disabled={isDownloadingSkaterDB}
+                      >
+                        Download CSV
                       </button>
                       
                       <button 
