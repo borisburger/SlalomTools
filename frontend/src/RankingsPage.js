@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import NavBar from './NavBar';
 
 const API_BASE = "http://localhost:8000";
 
@@ -1177,15 +1178,8 @@ const RankingsPage = () => {
 
   return (
     <div className="container" style={styles.container}>
-      <div style={styles.header}>
-        <h1 style={styles.headerTitle}>World Rankings Management</h1>
-        <button 
-          onClick={() => window.location.href = "/operator"}
-          style={styles.backButton}
-        >
-          Back to Operator Console
-        </button>
-      </div>
+      <NavBar />
+      <h1 style={styles.headerTitle}>World Rankings Management</h1>
       
       <div style={styles.rankingsContainer}>
         {loading ? (
@@ -1347,7 +1341,7 @@ const RankingsPage = () => {
                         style={{
                           ...styles.button, 
                           marginLeft: '10px',
-                          background: '#6610f2', // Purple color for special action
+                          background: '#6610f2',
                           opacity: (isDownloadingSkaterDB || loadingFullDB) ? 0.6 : 1,
                           cursor: (isDownloadingSkaterDB || loadingFullDB) ? 'not-allowed' : 'pointer'
                         }}
@@ -1355,6 +1349,24 @@ const RankingsPage = () => {
                       >
                         {loadingFullDB ? 'Loading...' : fullSkaterDB ? 'Reload Database' : 'Load for Registration Verification'}
                       </button>
+
+                      <a
+                        href="https://www.worldskate.org/inline-freestyle/athletes.html"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          ...styles.button,
+                          marginLeft: '10px',
+                          background: '#007bff',
+                          textDecoration: 'none',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          fontSize: '0.9em'
+                        }}
+                      >
+                        <span style={{ marginRight: "5px" }}>Official WS Athlete DB</span>
+                        <span>↗</span>
+                      </a>
                     </div>
                   )}
                 </div>

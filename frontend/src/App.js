@@ -13,7 +13,7 @@ function App() {
         <Route path="/public" element={<PublicPage />} />
         <Route path="/reg" element={<RegistrationPage />} />
         <Route path="/rankings" element={<RankingsPage />} />
-        <Route path="/" element={<Navigate to="/operator" replace />} />
+        <Route path="/" element={<Navigate to="/reg" replace />} />
       </Routes>
     </BrowserRouter>
   );

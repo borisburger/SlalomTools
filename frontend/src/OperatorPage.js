@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import NavBar from './NavBar';
 const API_BASE = "http://localhost:8000";
 function OperatorPage() {
   const [excelUrl, setExcelUrl] = useState("");
@@ -393,80 +394,7 @@ function OperatorPage() {
 
   return (
     <div style={{padding:"10px"}}>
-      {/* Header with title and navigation buttons in one line */}
-      <div style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        marginBottom: "20px"
-      }}>
-        <h2 style={{margin: 0}}>Operator Console</h2>
-        
-        <div style={{
-          display: "flex",
-          gap: "10px"
-        }}>
-          <button 
-            onClick={() => window.location.href = "/rankings"}
-            style={{
-              padding: "8px 15px",
-              backgroundColor: "#6f42c1",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: "pointer",
-              fontSize: "1rem",
-              fontWeight: "bold",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px"
-            }}
-          >
-            <span>World Rankings</span>
-            <span style={{fontSize: "0.9rem"}}>→</span>
-          </button>
-          
-          <button 
-            onClick={() => window.location.href = "/reg"}
-            style={{
-              padding: "8px 15px",
-              backgroundColor: "#007BFF",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: "pointer",
-              fontSize: "1rem",
-              fontWeight: "bold",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px"
-            }}
-          >
-            <span>Registration Lists</span>
-            <span style={{fontSize: "0.9rem"}}>→</span>
-          </button>
-          
-          <button 
-            onClick={() => window.open("/public", "_blank")}
-            style={{
-              padding: "8px 15px",
-              backgroundColor: "#4CAF50",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: "pointer",
-              fontSize: "1rem",
-              fontWeight: "bold",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px"
-            }}
-          >
-            <span>Public View</span>
-            <span style={{fontSize: "0.9rem"}}>↗</span>
-          </button>
-        </div>
-      </div>
+      <NavBar />
       
       {/* Authentication Status - Collapsible */}
       <div style={{
@@ -746,7 +674,33 @@ function OperatorPage() {
           background: "#222",
           color: "#fff"
         }}>
-          <h3 style={{marginTop: 0}}>Public Display Mode</h3>
+          <div style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "15px"
+          }}>
+            <h3 style={{margin: 0}}>Public Display Mode</h3>
+            <button 
+              onClick={() => window.open("/public", "_blank")}
+              style={{
+                padding: "8px 15px",
+                backgroundColor: "#4CAF50",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontSize: "0.9rem",
+                fontWeight: "bold",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px"
+              }}
+            >
+              <span>Open Public View</span>
+              <span>↗</span>
+            </button>
+          </div>
           
           <div style={{
             display: "flex", 

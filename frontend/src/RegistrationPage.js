@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import NavBar from './NavBar';
 
 const API_BASE = "http://localhost:8000";
 const LOCAL_STORAGE_KEY = "registration_sheet_url";
@@ -27,6 +28,7 @@ const DISPLAY_PRESETS = {
   },
   "new_skaters": {
     name: "New Skaters",
+    description: "Shows skaters without a World Skate ID who are at least 10 years old. Skaters with no date of birth are excluded.",
     columns: ["first_name", "family_name", "sex", "dob", "nationality"],
     showOrder: false,
     specialFilters: {
@@ -36,6 +38,7 @@ const DISPLAY_PRESETS = {
   },
   "skaters_with_ws_id": {
     name: "Skaters with WS ID",
+    description: "Shows only skaters who have a World Skate ID and are at least 10 years old. Skaters with no date of birth are excluded.",
     columns: ["world_skate_id", "national_federation_id", "first_name", "family_name", "sex", "dob", "nationality"],
     showOrder: false,
     specialFilters: {
@@ -1810,34 +1813,67 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
       minHeight: "100vh",
       fontFamily: "Arial, sans-serif"
     }}>
-      <div style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        marginBottom: "20px"
-      }}>
-        <h1 style={{ margin: 0 }}>Registration Management</h1>
-        <button 
-          onClick={() => window.location.href = "/operator"}
-          style={{
-            padding: "8px 15px",
-            backgroundColor: "#555",
-            color: "white",
-            border: "none",
-            borderRadius: "4px",
-            cursor: "pointer",
-            fontSize: "1rem",
-            fontWeight: "bold",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px"
-          }}
-        >
-          <span>Back to Operator Console</span>
-          <span style={{fontSize: "0.9rem"}}>←</span>
-        </button>
-      </div>
+      <NavBar />
+      <h1 style={{ margin: 0, marginBottom: "20px" }}>Registration Management</h1>
       
+      {/* World Skate data status line */}
+      <div style={{
+        marginBottom: "15px",
+        padding: "8px 15px",
+        fontSize: "0.9em",
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        flexWrap: "wrap"
+      }}>
+        {/* Rankings status */}
+        {isLoadingRankings ? (
+          <span style={{ color: "#FFA500" }}>Loading rankings...</span>
+        ) : rankingsError ? (
+          <span style={{ color: "#dc3545" }}>Rankings error: {rankingsError}</span>
+        ) : Object.keys(rankingsData).length > 0 ? (
+          <span style={{ color: "#4CAF50" }}>
+            WS rankings loaded: {rankingsLatestUpdate}.
+          </span>
+        ) : (
+          <span style={{ color: "#999" }}>Rankings not available.</span>
+        )}
+
+        {/* Separator */}
+        {!isLoadingRankings && !isLoadingSkaterDB && (
+          <span style={{ color: "#555" }}>|</span>
+        )}
+
+        {/* Skater DB status */}
+        {isLoadingSkaterDB ? (
+          <span style={{ color: "#FFA500" }}>Loading Athletes DB...</span>
+        ) : skaterDBError ? (
+          <span style={{ color: "#dc3545" }}>Athletes DB error: {skaterDBError}</span>
+        ) : skaterDB ? (
+          <span style={{ color: "#4CAF50" }}>
+            Athletes DB loaded ({skaterDB.uniqueSkatersCount.toLocaleString()} skaters).
+          </span>
+        ) : (
+          <span style={{ color: "#999", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+            Athletes DB not loaded.
+            <button
+              onClick={() => fetchSkaterDatabase()}
+              style={{
+                padding: "1px 6px",
+                fontSize: "0.9em",
+                backgroundColor: "#6610f2",
+                color: "white",
+                border: "none",
+                borderRadius: "3px",
+                cursor: "pointer"
+              }}
+            >
+              Load
+            </button>
+          </span>
+        )}
+      </div>
+
       {/* Google Authentication Section */}
       <div style={{
         marginBottom: "15px",
@@ -1931,22 +1967,31 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
               flexDirection: "column",
               overflow: "hidden"
             }}>
-              <span style={{ fontWeight: "bold", marginBottom: "2px" }}>Google Sheets Source:</span>
+              <span style={{ fontWeight: "bold", marginBottom: "2px" }}>Registration Table in Google Sheets:</span>
               {skaters.length > 0 && (
-                <>
-                  <span style={{ color: "#4CAF50", fontWeight: "bold", marginBottom: "2px" }}>
-                    {documentTitle} ({skaters.length} skaters)
-                  </span>
-                  <span style={{ 
-                    color: "#4CAF50", 
-                    fontSize: "0.85em",
-                    textOverflow: "ellipsis",
-                    overflow: "hidden",
-                    whiteSpace: "nowrap"
-                  }}>
-                    {sheetsUrl}
-                  </span>
-                </>
+                <span style={{ color: "#4CAF50", fontWeight: "bold", display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                  {documentTitle} ({skaters.length} skaters)
+                  {sheetsUrl && (
+                    <a
+                      href={sheetsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        padding: "1px 8px",
+                        fontSize: "0.85em",
+                        backgroundColor: "#007bff",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "3px",
+                        textDecoration: "none",
+                        whiteSpace: "nowrap"
+                      }}
+                    >
+                      Open ↗
+                    </a>
+                  )}
+                </span>
               )}
               {skaters.length === 0 && sheetsUrl && (
                 <span style={{ color: "#FFA500" }}>
@@ -2256,84 +2301,14 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                 </button>
               ))}
             </div>
+            {DISPLAY_PRESETS[displayPreset]?.description && (
+              <div style={{ color: "#aaa", fontSize: "0.85em", marginTop: "6px" }}>
+                {DISPLAY_PRESETS[displayPreset].description}
+              </div>
+            )}
           </div>
           
-          {/* Rankings status indicator */}
-          {isLoadingRankings ? (
-            <div style={{ marginTop: "15px", fontSize: "0.9em", color: "#FFA500" }}>
-              Loading world rankings data...
-            </div>
-          ) : rankingsError ? (
-            <div style={{ marginTop: "15px", fontSize: "0.9em", color: "#dc3545" }}>
-              Error loading rankings: {rankingsError}
-            </div>
-          ) : Object.keys(rankingsData).length > 0 ? (
-            <div style={{ marginTop: "15px", fontSize: "0.9em", color: "#4CAF50", display: "flex", alignItems: "center" }}>
-              <span style={{ 
-                width: "8px", 
-                height: "8px", 
-                backgroundColor: "#4CAF50", 
-                borderRadius: "50%", 
-                display: "inline-block",
-                marginRight: "8px" 
-              }}></span>
-              World rankings loaded ({rankingsLatestUpdate}) - {Object.keys(rankingsData).length} disciplines
-            </div>
-          ) : (
-            <div style={{ marginTop: "15px", fontSize: "0.9em", color: "#999" }}>
-              No world rankings data available
-            </div>
-          )}
-          
-          {/* World Skate database status indicator */}
-          {isLoadingSkaterDB ? (
-            <div style={{ marginTop: "15px", fontSize: "0.9em", color: "#FFA500" }}>
-              Loading World Skate database...
-            </div>
-          ) : skaterDBError ? (
-            <div style={{ marginTop: "15px", fontSize: "0.9em", color: "#dc3545" }}>
-              Error loading skater database: {skaterDBError}
-            </div>
-          ) : skaterDB ? (
-            <div style={{ marginTop: "15px", fontSize: "0.9em", color: "#4CAF50", display: "flex", alignItems: "center" }}>
-              <span style={{ 
-                width: "8px", 
-                height: "8px", 
-                backgroundColor: "#4CAF50", 
-                borderRadius: "50%", 
-                display: "inline-block",
-                marginRight: "8px" 
-              }}></span>
-              World Skate database loaded ({skaterDB.uniqueSkatersCount.toLocaleString()} skaters, {skaterDB.totalIdsCount.toLocaleString()} total IDs including previous ones)
-            </div>
-          ) : (
-            <div style={{ marginTop: "15px", fontSize: "0.9em", color: "#999", display: "flex", alignItems: "center" }}>
-              <span style={{ 
-                width: "8px", 
-                height: "8px", 
-                backgroundColor: "#999", 
-                borderRadius: "50%", 
-                display: "inline-block",
-                marginRight: "8px" 
-              }}></span>
-              World Skate database not loaded
-              <button
-                onClick={() => fetchSkaterDatabase()}
-                style={{
-                  marginLeft: "10px",
-                  padding: "2px 8px",
-                  fontSize: "0.9em",
-                  backgroundColor: "#6610f2",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: "pointer"
-                }}
-              >
-                Load Database
-              </button>
-            </div>
-          )}
+          {/* Verification button moved here, status indicators moved above Display Options */}
           
           {/* Verification button */}
           {skaterDB && filteredSkaters.length > 0 && (
@@ -2352,54 +2327,19 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                 Verify IDs & Birth Dates
               </button>
               
-              <button
-                onClick={async () => {
-                  // Force database reload and verification
-                  console.log("Force loading database and verifying all skaters");
-                  const db = await fetchSkaterDatabase(0, 3); // Fresh load with retries
-                  if (db && db.data && db.data.skaters) {
-                    console.log("Database force-loaded successfully, verifying skaters");
-                    verifySkaters(filteredSkaters, db.idMap);
-                  }
-                }}
-                style={{
-                  padding: "8px 12px",
-                  backgroundColor: "#dc3545",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: "pointer"
-                }}
-              >
-                Force Reload & Verify
-              </button>
-              
-              <a 
-                href="https://www.worldskate.org/inline-freestyle/athletes.html" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                style={{
-                  padding: "8px 12px",
-                  backgroundColor: "#007bff",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                  textDecoration: "none",
-                  display: "flex",
-                  alignItems: "center",
-                  fontSize: "0.9em"
-                }}
-              >
-                <span style={{ marginRight: "5px" }}>Official WS Athlete DB</span>
-                <span>↗</span>
-              </a>
-              
-              <span style={{ marginLeft: "auto", fontSize: "0.9em", color: "#aaa" }}>
-                {Object.keys(verificationResults).length > 0 
-                  ? `${Object.values(verificationResults).filter(r => r.verified).length} of ${Object.keys(verificationResults).length} verified`
-                  : "Click to verify skaters against World Skate database"}
-              </span>
+              {Object.keys(verificationResults).length > 0 && (() => {
+                const total = Object.keys(verificationResults).length;
+                const verified = Object.values(verificationResults).filter(r => r.verified).length;
+                const issues = total - verified;
+                return (
+                  <span style={{ fontSize: "0.9em", display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ color: "#4CAF50" }}>{verified} of {total} verified</span>
+                    {issues > 0 && (
+                      <span style={{ color: "#dc3545", fontWeight: "bold" }}>({issues} with issues)</span>
+                    )}
+                  </span>
+                );
+              })()}
             </div>
           )}
         </div>
