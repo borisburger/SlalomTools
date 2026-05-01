@@ -1660,8 +1660,14 @@ async def serve_react_app(request: Request, catch_all: str):
         # They should be handled by their specific route handlers defined earlier
         return JSONResponse(status_code=404, content={"detail": "API endpoint not found"})
     
-    # Skip API routes
-    if path.startswith("/api/") or path.startswith("/ws/") or (path.startswith("/rankings/") and not path.startswith("/rankings/info") and not path.startswith("/rankings/update")):
+    # Skip API routes - add more specific API endpoints
+    api_prefixes = ["/api/", "/ws/", "/auth/", "/config", "/auto_refresh/", "/load_excel", "/upload_background", "/switch_display_mode", "/google/", "/registration/"]
+    rankings_api_paths = ["/rankings/info", "/rankings/update", "/rankings/progress", "/rankings/download-zip"]
+    
+    # Check if this is an API route that should not be caught by the frontend catch-all
+    is_api_route = any(path.startswith(prefix) for prefix in api_prefixes) or path in rankings_api_paths
+    
+    if is_api_route:
         print(f"[DEBUG] Skipping API route in catch-all: {path}")
         return JSONResponse(status_code=404, content={"detail": "Not Found - API route not defined"})
     
