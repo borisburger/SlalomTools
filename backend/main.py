@@ -43,8 +43,8 @@ TOKEN_CACHE_FILE = os.path.join(BASE_DIR, "token_cache.json")
 os.makedirs(STATIC_DIR, exist_ok=True)
 
 # Microsoft Graph settings
-AUTHORITY = "https://login.microsoftonline.com/common"
-SCOPES = ["Files.Read", "Files.Read.All"]
+AUTHORITY = "https://login.microsoftonline.com/consumers"  # Use consumers endpoint for personal accounts
+SCOPES = ["Files.Read"]  # Start with minimal scope
 
 # FastAPI app
 app = FastAPI()
@@ -340,11 +340,13 @@ def get_user_token():
 
     print("No valid token in memory, attempting to load from cache")
     cache = load_token_cache() or msal.SerializableTokenCache()
+    print(f"Creating MSAL client with client_id: {secrets['microsoft']['client_id']}")
     client = msal.PublicClientApplication(
         secrets["microsoft"]["client_id"],
         authority=AUTHORITY,
         token_cache=cache
     )
+    print("MSAL client created successfully")
 
     accounts = client.get_accounts()
     if accounts:
@@ -382,8 +384,32 @@ def get_user_token():
                 auth_state["flow"] = None
                 raise Exception("Device code has expired. Please initiate a new authentication flow.")
 
-            result = client.acquire_token_by_device_flow(auth_state["flow"])
-            print(f"Device flow result: {json.dumps(result, indent=2)}")
+            # Respect the MSAL interval requirement - don't call too frequently
+            flow_interval = auth_state["flow"].get("interval", 5)
+            
+            # Check if we need to wait before attempting
+            if not hasattr(auth_state["flow"], "_last_attempt"):
+                auth_state["flow"]["_last_attempt"] = 0
+            
+            time_since_last_attempt = time.time() - auth_state["flow"]["_last_attempt"]
+            
+            if time_since_last_attempt < flow_interval:
+                wait_time = flow_interval - time_since_last_attempt
+                print(f"MSAL interval not met. Need to wait {wait_time:.1f} more seconds before next attempt.")
+                return None  # Return None to indicate we should try again later
+            
+            print("About to call client.acquire_token_by_device_flow()...")
+            auth_state["flow"]["_last_attempt"] = time.time()
+            
+            try:
+                result = client.acquire_token_by_device_flow(auth_state["flow"])
+                print("acquire_token_by_device_flow() completed successfully")
+                print(f"Device flow result: {json.dumps(result, indent=2)}")
+                
+            except Exception as device_flow_error:
+                print(f"Error in acquire_token_by_device_flow(): {device_flow_error}")
+                print(f"Error type: {type(device_flow_error)}")
+                raise
             
             if result and "access_token" in result:
                 print("Successfully acquired token through device flow")
@@ -696,6 +722,36 @@ async def broadcast_to_public(msg: dict):
             public_connections.remove(ws)
 
 
+@app.post("/auth/test")
+async def test_auth():
+    """Test MSAL device code flow - identical to working test script."""
+    try:
+        client_id = secrets["microsoft"]["client_id"]
+        authority = "https://login.microsoftonline.com/common"
+        scopes = ["Files.Read", "Files.Read.All"]
+        
+        print(f"TEST: Using client ID: {client_id}")
+        print(f"TEST: Using authority: {authority}")
+        print(f"TEST: Requested scopes: {scopes}")
+        
+        client = msal.PublicClientApplication(client_id, authority=authority)
+        flow = client.initiate_device_flow(scopes=scopes)
+        
+        if "error" in flow:
+            return JSONResponse(status_code=400, content={"error": flow["error"]})
+        
+        verification_url = flow.get("verification_uri") or flow.get("verification_url", "https://microsoft.com/devicelogin")
+        print(f"TEST: Verification URL: {verification_url}")
+        
+        return {
+            "message": flow["message"],
+            "user_code": flow["user_code"],
+            "verification_url": verification_url,
+            "test": True
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
 @app.post("/auth/initiate")
 async def initiate_auth():
     """Initiate MSAL device code flow."""
@@ -734,11 +790,23 @@ async def initiate_auth():
         })
         
         print("Initiating device flow...")
+        print(f"MSAL version: {msal.__version__}")
+        print(f"Client configuration:")
+        print(f"  - Client ID: {client_id}")
+        print(f"  - Authority: {AUTHORITY}")
+        print(f"  - Scopes: {SCOPES}")
+        
         try:
             flow = client.initiate_device_flow(scopes=SCOPES)
+            print(f"Device flow initiated successfully!")
             print(f"Device flow response: {json.dumps(flow, indent=2)}")
+            print(f"Verification URI from MSAL: {flow.get('verification_uri', 'NOT FOUND')}")
+            print(f"Verification URL (deprecated): {flow.get('verification_url', 'NOT FOUND')}")
         except Exception as e:
             print(f"Error initiating device flow: {str(e)}")
+            print(f"Exception type: {type(e)}")
+            import traceback
+            print(f"Full traceback: {traceback.format_exc()}")
             raise
         
         if "error" in flow:
@@ -748,8 +816,8 @@ async def initiate_auth():
             print(error_msg)
             return JSONResponse(status_code=400, content={"error": error_msg})
         
-        # Override the default expiration time to 60 seconds
-        flow["expires_in"] = 60
+        # Use the default expiration time from Microsoft (usually 15 minutes)
+        # flow["expires_in"] = 60  # Commented out - use Microsoft's default
         
         # Add start time to flow for expiry checking
         flow["_start_time"] = time.time()
@@ -765,12 +833,19 @@ async def initiate_auth():
         print(f"Expires in: {flow.get('expires_in', 60)} seconds")
         print(f"Interval: {flow.get('interval', 5)} seconds")
         
+        # Use the exact URL that MSAL provides - the device code is tied to this specific URL
+        verification_url = flow.get("verification_uri") or flow.get("verification_url", "https://microsoft.com/devicelogin")
+        print(f"Using MSAL verification URL: {verification_url}")
+        
+        # Modify the message to warn about potential redirect issues
+        modified_message = flow["message"] + "\n\nNote: If you encounter errors, try refreshing the page or using a different browser."
+        
         return {
-            "message": flow["message"],
+            "message": modified_message,
             "user_code": flow["user_code"],
-            "verification_url": "https://microsoft.com/devicelogin",
-            "expires_in": flow.get("expires_in", 60),  # Default to 60 seconds if not specified
-            "interval": flow.get("interval", 5)  # Default to 5 seconds if not specified
+            "verification_url": verification_url,
+            "expires_in": flow.get("expires_in", 900),
+            "interval": flow.get("interval", 5)
         }
     except Exception as e:
         error_msg = f"Failed to initiate authentication: {str(e)}"
@@ -793,8 +868,8 @@ async def get_auth_status():
                         "is_authenticated": False,
                         "message": "Authorization pending. Please complete the authentication on the device.",
                         "user_code": flow["user_code"],
-                        "verification_url": "https://microsoft.com/devicelogin",
-                        "expires_in": flow.get("expires_in", 60),
+                        "verification_url": flow.get("verification_uri", "https://microsoft.com/devicelogin"),
+                        "expires_in": flow.get("expires_in", 900),
                         "interval": flow.get("interval", 5)
                     }
         except Exception as e:
@@ -805,8 +880,8 @@ async def get_auth_status():
                     "is_authenticated": False,
                     "message": str(e),
                     "user_code": flow["user_code"],
-                    "verification_url": "https://microsoft.com/devicelogin",
-                    "expires_in": flow.get("expires_in", 60),
+                    "verification_url": flow.get("verification_uri", "https://microsoft.com/devicelogin"),
+                    "expires_in": flow.get("expires_in", 900),
                     "interval": flow.get("interval", 5)
                 }
             return {"is_authenticated": False, "message": str(e)}

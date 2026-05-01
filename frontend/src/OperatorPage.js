@@ -168,6 +168,8 @@ function OperatorPage() {
     try {
       const response = await fetch(`${API_BASE}/auth/initiate`, { method: 'POST' });
       const data = await response.json();
+      console.log("Auth initiate response:", data);
+      console.log("Opening verification URL:", data.verification_url);
       setAuthMessage(data.message);
       // Open the verification URL in a new tab
       window.open(data.verification_url, '_blank');
