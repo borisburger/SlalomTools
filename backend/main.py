@@ -17,7 +17,7 @@ import msal
 # Import the Google Sheets module
 from google_sheets import initiate_auth_flow, complete_auth_flow, get_credentials, fetch_spreadsheet_data, parse_registration_data
 # Import rankings module
-from rankings import fetch_rankings, get_latest_rankings_folder, format_date_for_folder, get_discipline_file_path, get_download_progress, fetch_skater_database, get_skater_db_progress
+from rankings import fetch_rankings, get_latest_rankings_folder, format_date_for_folder, find_latest_archive_date, get_discipline_file_path, get_download_progress, fetch_skater_database, get_skater_db_progress
 import csv
 from bs4 import BeautifulSoup
 
@@ -1473,16 +1473,12 @@ async def get_rankings_info():
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, 'html.parser')
                 
-                # Extract the latest ranking date from the first archive link
-                archives_div = soup.find('div', class_='left-filters')
-                latest_link = archives_div.find('a') if archives_div else None
-                if latest_link:
-                    # Convert from YYYY-MM-DD to YYYY-MM_Month format
-                    external_latest_date_raw = latest_link.get_text(strip=True)
-                    external_latest_date = format_date_for_folder(external_latest_date_raw)
-                    
-                    # Check if a newer version is available
-                    newer_available = latest_date != external_latest_date
+                # Extract the latest ranking date, filtering out future dates
+                external_latest_date_raw = find_latest_archive_date(soup)
+                external_latest_date = format_date_for_folder(external_latest_date_raw)
+                
+                # Check if a newer version is available
+                newer_available = latest_date != external_latest_date
         except Exception as e:
             print(f"Error checking for latest rankings: {e}")
         

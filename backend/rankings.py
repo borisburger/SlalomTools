@@ -128,6 +128,40 @@ def extract_discipline_type(discipline_name):
     
     return parts[0] if parts else ''
 
+def find_latest_archive_date(soup):
+    """
+    Find the most recent archive date that is not in the future.
+    The external site may list dates that haven't occurred yet,
+    so we filter those out and return the latest valid one.
+
+    Args:
+        soup: BeautifulSoup object of the rankings page
+
+    Returns:
+        str: The latest valid date string in "YYYY-MM-DD" format
+    """
+    archives_div = soup.find('div', class_='left-filters')
+    if not archives_div:
+        raise ValueError("Archives section not found on page")
+
+    today = datetime.now().date()
+    best_date = None
+
+    for link in archives_div.find_all('a'):
+        date_text = link.get_text(strip=True)
+        try:
+            link_date = datetime.strptime(date_text, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if link_date <= today and (best_date is None or link_date > best_date):
+            best_date = link_date
+
+    if best_date is None:
+        raise ValueError("No valid (non-future) archive date found")
+
+    return best_date.strftime("%Y-%m-%d")
+
+
 def format_date_for_folder(date_string):
     """
     Convert a date string from "YYYY-MM-DD" to "YYYY-MM_Month" format
@@ -248,14 +282,8 @@ def fetch_rankings(base_url=None):
     soup = BeautifulSoup(response.text, 'html.parser')
     logging.info("Rankings page fetched and parsed successfully")
 
-    # Extract the latest ranking date from the first archive link
-    archives_div = soup.find('div', class_='left-filters')
-    latest_link = archives_div.find('a') if archives_div else None
-    if not latest_link:
-        logging.error("Latest archive link not found")
-        raise ValueError("Latest archive link not found")
-        
-    latest_date = latest_link.get_text(strip=True)
+    # Extract the latest ranking date, filtering out future dates
+    latest_date = find_latest_archive_date(soup)
     logging.info(f"Latest ranking date: {latest_date}")
 
     # Format the date for the folder name
