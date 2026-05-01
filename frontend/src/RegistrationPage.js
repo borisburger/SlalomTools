@@ -7,22 +7,22 @@ const LOCAL_STORAGE_KEY = "registration_sheet_url";
 
 const DISPLAY_PRESETS = {
   "classic": {
-    name: "Classic (ID, Name, Team, W. Rank, Ctry)",
+    name: "Classic Sheet",
     columns: ["world_skate_id", "full_name", "club", "world_rank", "nationality"],
     showOrder: false
   },
   "battle": {
-    name: "Battle (ID, BIB, Name, Team, Ctry, W.Rank)",
+    name: "Battle Sheet",
     columns: ["world_skate_id", "bib", "full_name", "club", "nationality", "world_rank"],
     showOrder: false
   },
   "names_only": {
-    name: "Names Only",
+    name: "Names",
     columns: ["full_name"],
     showOrder: false
   },
   "complete": {
-    name: "Complete Profile",
+    name: "Complete Data",
     columns: ["world_skate_id", "full_name", "dob", "age", "sex", "nationality", "club", "disciplines", "email", "phone"],
     showOrder: true
   },
@@ -55,31 +55,25 @@ const CURRENT_YEAR = new Date().getFullYear();
 const getAgePresets = () => {
   return {
     "kids_u10": {
-      name: "Kids U10",
+      name: "U10",
       // Kids 4-9 years old (will not reach 10 this year)
       minYear: CURRENT_YEAR - 9,  // Oldest: turning 9 this year
       maxYear: CURRENT_YEAR - 4   // Youngest: turning 4 this year (practical minimum)
     },
     "juniors_u15": {
-      name: "Juniors U15",
+      name: "U15",
       // Kids 10-14 years old this year
       minYear: CURRENT_YEAR - 14, // Oldest: turning 14 this year
       maxYear: CURRENT_YEAR - 10  // Youngest: turning 10 this year
     },
-    "juniors_1_14": {
-      name: "Juniors 1-14",
-      // Kids 1-14 years old this year (no lower age limit)
-      minYear: CURRENT_YEAR - 14, // Oldest: turning 14 this year
-      maxYear: null               // No lower age limit (allows very young kids)
-    },
     "juniors_u19": {
-      name: "Juniors U19",
+      name: "U19",
       // Teens 15-18 years old this year
       minYear: CURRENT_YEAR - 18, // Oldest: turning 18 this year
       maxYear: CURRENT_YEAR - 15  // Youngest: turning 15 this year
     },
     "juniors_10_18": {
-      name: "Juniors 10-18",
+      name: "10-18",
       // All juniors 10-18 years old this year
       minYear: CURRENT_YEAR - 18, // Oldest: turning 18 this year
       maxYear: CURRENT_YEAR - 10  // Youngest: turning 10 this year
@@ -90,8 +84,14 @@ const getAgePresets = () => {
       minYear: null,               // No upper age limit
       maxYear: CURRENT_YEAR - 19   // Youngest: turning 19 this year
     },
+    "juniors_1_14": {
+      name: "1-14",
+      // Kids 1-14 years old this year (no lower age limit)
+      minYear: CURRENT_YEAR - 14, // Oldest: turning 14 this year
+      maxYear: null               // No lower age limit (allows very young kids)
+    },
     "custom": {
-      name: "Custom Range",
+      name: "Range",
       minYear: null,
       maxYear: null,
       isCustom: true
@@ -2258,9 +2258,8 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
         }}>
           <h2 style={{ marginTop: 0 }}>Display Options</h2>
           
-          <div style={{ marginBottom: "15px" }}>
-            <label style={{ display: "block", marginBottom: "5px" }}>Filter by Discipline:</label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
+          <div style={{ marginBottom: "15px", display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+            <label style={{ fontWeight: "bold", whiteSpace: "nowrap", minWidth: "8em" }}>Discipline:</label>
               <button
                 onClick={() => handleDisciplineChange("")}
                 style={{
@@ -2272,7 +2271,7 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                   cursor: "pointer"
                 }}
               >
-                All Disciplines
+                All
               </button>
               {disciplines.map(discipline => (
                 <button
@@ -2287,15 +2286,46 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                     cursor: "pointer"
                   }}
                 >
-                  {discipline}
+                  {discipline.replace("Freestyle Slalom ", "")}
                 </button>
               ))}
-            </div>
           </div>
           
-          <div style={{ marginBottom: "15px" }}>
-            <label style={{ display: "block", marginBottom: "5px" }}>Filter by Gender:</label>
-            <div style={{ display: "flex", gap: "10px" }}>
+          <div style={{ marginBottom: "15px", display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+            <label style={{ fontWeight: "bold", whiteSpace: "nowrap", minWidth: "8em" }}>Age:</label>
+              <button
+                onClick={() => handleAgePresetChange("all")}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: "4px",
+                  border: "none",
+                  backgroundColor: selectedAgePreset === "all" ? "#007BFF" : "#444",
+                  color: "white",
+                  cursor: "pointer"
+                }}
+              >
+                All
+              </button>
+              {Object.entries(AGE_PRESETS).map(([key, preset]) => (
+                <button
+                  key={key}
+                  onClick={() => handleAgePresetChange(key)}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: "4px",
+                    border: "none",
+                    backgroundColor: selectedAgePreset === key ? "#007BFF" : "#444",
+                    color: "white",
+                    cursor: "pointer"
+                  }}
+                >
+                  {preset.name}
+                </button>
+              ))}
+          </div>
+          
+          <div style={{ marginBottom: "15px", display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+            <label style={{ fontWeight: "bold", whiteSpace: "nowrap", minWidth: "8em" }}>Gender:</label>
               <button
                 onClick={() => handleGenderChange("all")}
                 style={{
@@ -2320,7 +2350,7 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                   cursor: "pointer"
                 }}
               >
-                Males
+                Men
               </button>
               <button
                 onClick={() => handleGenderChange("F")}
@@ -2333,44 +2363,8 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                   cursor: "pointer"
                 }}
               >
-                Females
+                Women
               </button>
-            </div>
-          </div>
-          
-          <div style={{ marginBottom: "15px" }}>
-            <label style={{ display: "block", marginBottom: "5px" }}>Filter by Age:</label>
-            <div style={{ display: "flex", gap: "10px" }}>
-              <button
-                onClick={() => handleAgePresetChange("all")}
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: "4px",
-                  border: "none",
-                  backgroundColor: selectedAgePreset === "all" ? "#007BFF" : "#444",
-                  color: "white",
-                  cursor: "pointer"
-                }}
-              >
-                All Ages
-              </button>
-              {Object.entries(AGE_PRESETS).map(([key, preset]) => (
-                <button
-                  key={key}
-                  onClick={() => handleAgePresetChange(key)}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: "4px",
-                    border: "none",
-                    backgroundColor: selectedAgePreset === key ? "#007BFF" : "#444",
-                    color: "white",
-                    cursor: "pointer"
-                  }}
-                >
-                  {preset.name}
-                </button>
-              ))}
-            </div>
 
             {showCustomAgeControls && (
               <div style={{ 
@@ -2455,9 +2449,8 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
             )}
           </div>
           
-          <div>
-            <label style={{ display: "block", marginBottom: "5px" }}>Display Preset:</label>
-            <div style={{ display: "flex", gap: "10px" }}>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+            <label style={{ fontWeight: "bold", whiteSpace: "nowrap", minWidth: "8em" }}>Display Preset:</label>
               {Object.entries(DISPLAY_PRESETS).map(([key, preset]) => (
                 <button
                   key={key}
@@ -2474,7 +2467,6 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                   {preset.name}
                 </button>
               ))}
-            </div>
             {DISPLAY_PRESETS[displayPreset]?.description && (
               <div style={{ color: "#aaa", fontSize: "0.85em", marginTop: "6px" }}>
                 {DISPLAY_PRESETS[displayPreset].description}
