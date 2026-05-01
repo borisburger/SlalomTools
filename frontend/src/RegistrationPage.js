@@ -161,6 +161,11 @@ function RegistrationPage() {
   const [showAuthDetails, setShowAuthDetails] = useState(false);
   const [showSheetDetails, setShowSheetDetails] = useState(true);
   const [documentTitle, setDocumentTitle] = useState("");
+  // Cache info for the currently-loaded sheet:
+  // { fromCache: bool, cachedAt: ISO string, isStale: bool|null, checking: bool }
+  // isStale = null means we haven't run a staleness check yet.
+  const [cacheInfo, setCacheInfo] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
   const [rankingsData, setRankingsData] = useState({});
   const [rankingsLatestUpdate, setRankingsLatestUpdate] = useState("");
@@ -383,6 +388,19 @@ function RegistrationPage() {
         
         // Collapse the sheets source section after successful loading
         setShowSheetDetails(false);
+
+        // Track cache info; if we got cached data, kick off a background
+        // freshness check against Google.
+        const fromCache = !!data.from_cache;
+        setCacheInfo({
+          fromCache,
+          cachedAt: data.cached_at || null,
+          isStale: null,
+          checking: fromCache,
+        });
+        if (fromCache) {
+          checkStale(sheetsUrl);
+        }
       }
     } catch (error) {
       setError("Failed to load registration data: " + error.message);
@@ -402,14 +420,14 @@ function RegistrationPage() {
     }
   };
 
-  const fetchSkaters = async (discipline = "", sex = "all", agePreset = "all", currentDisplayPreset = null) => {
+  const fetchSkaters = async (discipline = "", sex = "all", agePreset = "all", currentDisplayPreset = null, forceRefetch = false) => {
     try {
       // Use the passed display preset or fall back to the state value
       const presetToUse = currentDisplayPreset || displayPreset;
-      console.log(`fetchSkaters called with discipline: ${discipline}, sex: ${sex}, agePreset: ${agePreset}, displayPreset: ${presetToUse}`);
+      console.log(`fetchSkaters called with discipline: ${discipline}, sex: ${sex}, agePreset: ${agePreset}, displayPreset: ${presetToUse}, forceRefetch: ${forceRefetch}`);
       
       // First fetch the full list of skaters if not already loaded
-      if (skaters.length === 0) {
+      if (forceRefetch || skaters.length === 0) {
         let url = `${API_BASE}/registration/skaters`;
         const response = await fetch(url);
         const data = await response.json();
@@ -833,6 +851,17 @@ function RegistrationPage() {
         
         // Explicitly collapse the sheet details section
         setShowSheetDetails(false);
+
+        const fromCache = !!data.from_cache;
+        setCacheInfo({
+          fromCache,
+          cachedAt: data.cached_at || null,
+          isStale: null,
+          checking: fromCache,
+        });
+        if (fromCache) {
+          checkStale(url);
+        }
       }
     } catch (error) {
       setError("Failed to load registration data: " + error.message);
@@ -840,6 +869,90 @@ function RegistrationPage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Background staleness probe — refetches the sheet on the backend, compares
+  // against the disk cache. Updates `cacheInfo.isStale` when done.
+  const checkStale = async (url) => {
+    if (!url) return;
+    try {
+      const response = await fetch(`${API_BASE}/registration/check-stale`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await response.json();
+      if (data.error) {
+        console.warn("check-stale failed:", data.error);
+        setCacheInfo(prev => prev ? { ...prev, checking: false } : prev);
+        return;
+      }
+      setCacheInfo(prev => prev ? {
+        ...prev,
+        isStale: !!data.is_stale,
+        // If the backend updated the cache, surface the newer cached_at so
+        // the "X minutes ago" label reflects the freshness probe time.
+        cachedAt: data.cached_at || prev.cachedAt,
+        checking: false,
+      } : prev);
+    } catch (err) {
+      console.warn("check-stale request failed:", err);
+      setCacheInfo(prev => prev ? { ...prev, checking: false } : prev);
+    }
+  };
+
+  // Force-refresh from Google, bypassing the cache, and reload everything.
+  const refreshRegistration = async () => {
+    const url = sheetsUrl || localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (!url) return;
+    try {
+      setIsRefreshing(true);
+      setError("");
+      const response = await fetch(`${API_BASE}/registration/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await response.json();
+      if (data.error) {
+        setError(data.error);
+        return;
+      }
+      if (data.document_title) {
+        setDocumentTitle(data.document_title);
+        localStorage.setItem(`${LOCAL_STORAGE_KEY}_title`, data.document_title);
+      }
+      // Force the API refetch path inside fetchSkaters so we don't reuse the
+      // stale `skaters` closure value.
+      await fetchDisciplines();
+      await fetchSkaters("", "all", "all", null, true);
+      setCacheInfo({
+        fromCache: false,
+        cachedAt: data.cached_at || null,
+        isStale: false,
+        checking: false,
+      });
+    } catch (err) {
+      setError("Failed to refresh: " + err.message);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  // Format an ISO timestamp as a relative "X minutes ago" string.
+  const formatRelativeTime = (isoString) => {
+    if (!isoString) return "";
+    const then = new Date(isoString);
+    if (isNaN(then.getTime())) return "";
+    const diffMs = Date.now() - then.getTime();
+    const diffSec = Math.max(0, Math.round(diffMs / 1000));
+    if (diffSec < 60) return `${diffSec}s ago`;
+    const diffMin = Math.round(diffSec / 60);
+    if (diffMin < 60) return `${diffMin} min ago`;
+    const diffHr = Math.round(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    const diffDay = Math.round(diffHr / 24);
+    return `${diffDay}d ago`;
   };
 
   // Function to get a shortened URL for display
@@ -1969,7 +2082,7 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
             }}>
               <span style={{ fontWeight: "bold", marginBottom: "2px" }}>Registration Table in Google Sheets:</span>
               {skaters.length > 0 && (
-                <span style={{ color: "#4CAF50", fontWeight: "bold", display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ color: "#4CAF50", fontWeight: "bold", display: "inline-flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                   {documentTitle} ({skaters.length} skaters)
                   {sheetsUrl && (
                     <a
@@ -1990,6 +2103,67 @@ World Skate: ${result.wsData.name || 'Not provided'} (${result.wsData.parsedDob 
                     >
                       Open ↗
                     </a>
+                  )}
+                  {cacheInfo && (() => {
+                    let bgColor = "#555";
+                    let label = "";
+                    const ago = formatRelativeTime(cacheInfo.cachedAt);
+                    if (cacheInfo.checking) {
+                      bgColor = "#6c757d";
+                      label = `Cached ${ago} · checking…`;
+                    } else if (cacheInfo.isStale) {
+                      bgColor = "#dc3545";
+                      label = `Updated on Google · please refresh`;
+                    } else if (cacheInfo.fromCache && cacheInfo.isStale === false) {
+                      bgColor = "#1e7e34";
+                      label = `Cached ${ago} · up to date`;
+                    } else if (cacheInfo.fromCache) {
+                      bgColor = "#17a2b8";
+                      label = `Cached ${ago}`;
+                    } else {
+                      bgColor = "#17a2b8";
+                      label = `Loaded fresh ${ago}`;
+                    }
+                    return (
+                      <span
+                        title={cacheInfo.cachedAt || ""}
+                        style={{
+                          padding: "1px 8px",
+                          fontSize: "0.85em",
+                          backgroundColor: bgColor,
+                          color: "white",
+                          borderRadius: "3px",
+                          whiteSpace: "nowrap",
+                          fontWeight: "normal"
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {label}
+                      </span>
+                    );
+                  })()}
+                  {sheetsUrl && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        refreshRegistration();
+                      }}
+                      disabled={isRefreshing || isLoading}
+                      style={{
+                        padding: "1px 8px",
+                        fontSize: "0.85em",
+                        backgroundColor: cacheInfo && cacheInfo.isStale ? "#dc3545" : "#6c757d",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "3px",
+                        cursor: (isRefreshing || isLoading) ? "not-allowed" : "pointer",
+                        whiteSpace: "nowrap",
+                        fontWeight: "normal",
+                        opacity: (isRefreshing || isLoading) ? 0.6 : 1
+                      }}
+                    >
+                      {isRefreshing ? "Refreshing…" : "Refresh"}
+                    </button>
                   )}
                 </span>
               )}

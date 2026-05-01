@@ -176,9 +176,8 @@ backend/rankings/
 frontend/node_modules/
 frontend/build/
 backend/google_secrets.json
-backend/google_token_cache.json
 backend/secrets.json
-backend/token_cache.json
+backend/cache/
 
 # Local data files (PII, debug, regenerable outputs)
 backend/registration_responses.csv

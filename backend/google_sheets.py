@@ -25,7 +25,32 @@ SCOPES = [
     'https://www.googleapis.com/auth/userinfo.profile',
     'openid'
 ]
-TOKEN_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "google_token_cache.json")
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_DIR = os.path.join(_BACKEND_DIR, "cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+TOKEN_CACHE_FILE = os.path.join(CACHE_DIR, "google_token_cache.json")
+METADATA_CACHE_FILE = os.path.join(CACHE_DIR, "sheet_metadata_cache.json")
+REGISTRATION_DATA_CACHE_FILE = os.path.join(CACHE_DIR, "registration_data_cache.json")
+
+
+def _migrate_legacy_cache_file(filename: str):
+    """Move a cache file from `backend/<filename>` to `backend/cache/<filename>`.
+
+    No-op if the legacy file is missing or the new file already exists.
+    """
+    legacy_path = os.path.join(_BACKEND_DIR, filename)
+    new_path = os.path.join(CACHE_DIR, filename)
+    if os.path.exists(legacy_path) and not os.path.exists(new_path):
+        try:
+            os.replace(legacy_path, new_path)
+            print(f"Migrated cache file: {filename} -> cache/{filename}")
+        except Exception as e:
+            print(f"Failed to migrate {filename}: {e}")
+
+
+for _f in ("google_token_cache.json", "sheet_metadata_cache.json", "registration_data_cache.json"):
+    _migrate_legacy_cache_file(_f)
 
 # Load secrets (create if doesn't exist)
 SECRETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "google_secrets.json")
@@ -44,6 +69,91 @@ if not os.path.exists(SECRETS_FILE):
 
 # Authentication state
 auth_state = {"credentials": None, "is_authenticated": False, "flow": None}
+
+# Per-spreadsheet metadata cache. The Sheets `spreadsheets().get` round-trip is
+# slow (~1-3.5 s) even with a `fields` mask, but the metadata we need from it
+# (first sheet's title, document title) doesn't change often. Cache it keyed
+# by spreadsheet_id so repeated loads of the same sheet skip the round-trip
+# entirely. The cache is also persisted to disk so it survives server
+# restarts; it self-heals on a stale-range error from `values().get`.
+_sheet_metadata_cache: dict = {}
+
+
+def _load_metadata_cache_from_disk():
+    """Populate `_sheet_metadata_cache` from the JSON file on disk."""
+    global _sheet_metadata_cache
+    if not os.path.exists(METADATA_CACHE_FILE):
+        return
+    try:
+        with open(METADATA_CACHE_FILE, 'r') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            _sheet_metadata_cache = data
+            print(f"Loaded sheet metadata cache: {len(_sheet_metadata_cache)} entries")
+    except Exception as e:
+        print(f"Failed to load sheet metadata cache: {e}")
+
+
+def _save_metadata_cache_to_disk():
+    """Atomically persist `_sheet_metadata_cache` to disk."""
+    try:
+        tmp_file = METADATA_CACHE_FILE + ".tmp"
+        with open(tmp_file, 'w') as f:
+            json.dump(_sheet_metadata_cache, f, indent=2)
+        os.replace(tmp_file, METADATA_CACHE_FILE)
+    except Exception as e:
+        print(f"Failed to save sheet metadata cache: {e}")
+
+
+_load_metadata_cache_from_disk()
+
+
+# Per-spreadsheet PARSED registration data cache. Stores the full skaters +
+# disciplines payload so the registration page can render instantly from disk
+# without going to Google. Stale-while-revalidate: the `/registration/check-stale`
+# endpoint refetches and updates this cache in the background.
+_registration_data_cache: dict = {}
+
+
+def _load_registration_data_cache_from_disk():
+    """Populate `_registration_data_cache` from the JSON file on disk."""
+    global _registration_data_cache
+    if not os.path.exists(REGISTRATION_DATA_CACHE_FILE):
+        return
+    try:
+        with open(REGISTRATION_DATA_CACHE_FILE, 'r') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            _registration_data_cache = data
+            print(f"Loaded registration data cache: {len(_registration_data_cache)} entries")
+    except Exception as e:
+        print(f"Failed to load registration data cache: {e}")
+
+
+def _save_registration_data_cache_to_disk():
+    """Atomically persist `_registration_data_cache` to disk."""
+    try:
+        tmp_file = REGISTRATION_DATA_CACHE_FILE + ".tmp"
+        with open(tmp_file, 'w') as f:
+            json.dump(_registration_data_cache, f, indent=2, default=str)
+        os.replace(tmp_file, REGISTRATION_DATA_CACHE_FILE)
+    except Exception as e:
+        print(f"Failed to save registration data cache: {e}")
+
+
+def get_cached_registration_data(spreadsheet_id: str):
+    """Return cached registration payload for a spreadsheet, or None."""
+    return _registration_data_cache.get(spreadsheet_id)
+
+
+def set_cached_registration_data(spreadsheet_id: str, payload: dict):
+    """Store the registration payload in cache and persist to disk."""
+    _registration_data_cache[spreadsheet_id] = payload
+    _save_registration_data_cache_to_disk()
+
+
+_load_registration_data_cache_from_disk()
+
 
 def load_token_cache():
     """Load the token cache from JSON file if it exists."""
@@ -77,75 +187,82 @@ def save_token_cache(credentials):
                 'token_uri': credentials.token_uri,
                 'client_id': credentials.client_id,
                 'client_secret': credentials.client_secret,
-                'scopes': credentials.scopes
+                'scopes': credentials.scopes,
             }
-            
-            # Add user info if available
+
+            # Persist expiry so the loaded credentials know when they're truly
+            # expired. Without this, `credentials.valid` can return True for an
+            # already-expired access token, forcing every Google API call to do
+            # a silent refresh round-trip.
+            if credentials.expiry is not None:
+                token_data['expiry'] = credentials.expiry.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
             if "user_info" in auth_state:
                 token_data["user_info"] = auth_state["user_info"]
-            
+
             with open(TOKEN_CACHE_FILE, 'w') as f:
                 json.dump(token_data, f)
             print("Successfully saved Google token cache")
         except Exception as e:
             print(f"Failed to save Google token cache: {e}")
 
-def get_credentials():
-    """Get Google OAuth2 credentials."""
+def _fetch_and_cache_user_info(credentials):
+    """Fetch user info from Google and store it in auth_state."""
+    try:
+        service = build('oauth2', 'v2', credentials=credentials)
+        user_info_response = service.userinfo().get().execute()
+        user_info = {'email': 'Unknown', 'name': 'Unknown User'}
+
+        if 'email' in user_info_response:
+            user_info['email'] = user_info_response['email']
+        if 'name' in user_info_response:
+            user_info['name'] = user_info_response['name']
+
+        auth_state["user_info"] = user_info
+    except Exception as e:
+        print(f"Warning: Failed to fetch user info: {e}")
+
+
+def get_credentials(skip_user_info: bool = False):
+    """Get Google OAuth2 credentials.
+
+    Args:
+        skip_user_info: If True, don't make a Google API call to fetch the
+            user's email/name. The userinfo round-trip adds ~500-700 ms and is
+            only needed by the auth-status endpoint, not by sheet fetching.
+    """
     global auth_state
     credentials = load_token_cache()
 
     if credentials and credentials.valid:
         auth_state["credentials"] = credentials
         auth_state["is_authenticated"] = True
-        
-        # Ensure we have user info
-        if not auth_state.get("user_info") or auth_state.get("user_info", {}).get("email") == "Unknown":
-            try:
-                # Try to fetch user info
-                service = build('oauth2', 'v2', credentials=credentials)
-                user_info_response = service.userinfo().get().execute()
-                user_info = {'email': 'Unknown', 'name': 'Unknown User'}
-                
-                if 'email' in user_info_response:
-                    user_info['email'] = user_info_response['email']
-                if 'name' in user_info_response:
-                    user_info['name'] = user_info_response['name']
-                
-                auth_state["user_info"] = user_info
-                save_token_cache(credentials)  # Update the cache with user info
-            except Exception as e:
-                print(f"Warning: Failed to fetch user info: {e}")
-        
+
+        # Only fetch user info on demand and only if we don't already have it.
+        needs_user_info = (
+            not auth_state.get("user_info")
+            or auth_state.get("user_info", {}).get("email") == "Unknown"
+        )
+        if not skip_user_info and needs_user_info:
+            _fetch_and_cache_user_info(credentials)
+            save_token_cache(credentials)
+
         return credentials
-    
+
     if credentials and credentials.expired and credentials.refresh_token:
         try:
             credentials.refresh(Request())
             auth_state["credentials"] = credentials
             auth_state["is_authenticated"] = True
-            
-            # After refresh, try to update user info
-            try:
-                service = build('oauth2', 'v2', credentials=credentials)
-                user_info_response = service.userinfo().get().execute()
-                user_info = {'email': 'Unknown', 'name': 'Unknown User'}
-                
-                if 'email' in user_info_response:
-                    user_info['email'] = user_info_response['email']
-                if 'name' in user_info_response:
-                    user_info['name'] = user_info_response['name']
-                
-                auth_state["user_info"] = user_info
-            except Exception as e:
-                print(f"Warning: Failed to update user info after refresh: {e}")
-            
+
+            if not skip_user_info:
+                _fetch_and_cache_user_info(credentials)
+
             save_token_cache(credentials)
             return credentials
         except Exception as e:
             print(f"Failed to refresh token: {e}")
-    
-    # If no valid credentials, need to authenticate
+
     return None
 
 def initiate_auth_flow():
@@ -285,40 +402,76 @@ def extract_spreadsheet_id_from_url(url):
         return match.group(1)
     return None
 
+
+def _fetch_and_cache_sheet_metadata(service, spreadsheet_id):
+    """Fetch first-sheet title + document title from Google and update caches.
+
+    Returns (sheet_title, document_title).
+    """
+    spreadsheet = service.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields="properties/title,sheets(properties/title)",
+    ).execute()
+    sheet_title = spreadsheet['sheets'][0]['properties']['title']
+    document_title = spreadsheet.get('properties', {}).get('title', 'Google Sheet')
+    _sheet_metadata_cache[spreadsheet_id] = {
+        "sheet_title": sheet_title,
+        "document_title": document_title,
+    }
+    _save_metadata_cache_to_disk()
+    return sheet_title, document_title
+
 def fetch_spreadsheet_data(url):
     """Fetch data from Google Sheets."""
+    t_total_start = time.perf_counter()
     try:
-        credentials = get_credentials()
+        credentials = get_credentials(skip_user_info=True)
         if not credentials:
             return {"error": "Not authenticated with Google"}
-        
+
         spreadsheet_id = extract_spreadsheet_id_from_url(url)
         if not spreadsheet_id:
             return {"error": "Invalid Google Sheets URL"}
-        
+
         service = build('sheets', 'v4', credentials=credentials)
-        
-        # Get spreadsheet metadata
-        spreadsheet = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-        sheet_title = spreadsheet['sheets'][0]['properties']['title']
-        document_title = spreadsheet.get('properties', {}).get('title', 'Google Sheet')
-        
-        # Get sheet data
-        result = service.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=sheet_title
-        ).execute()
-        
+
+        cached_meta = _sheet_metadata_cache.get(spreadsheet_id)
+        cache_was_used = cached_meta is not None
+        if cache_was_used:
+            sheet_title = cached_meta["sheet_title"]
+            document_title = cached_meta["document_title"]
+        else:
+            sheet_title, document_title = _fetch_and_cache_sheet_metadata(service, spreadsheet_id)
+
+        try:
+            result = service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=sheet_title,
+            ).execute()
+        except HttpError as e:
+            # Self-heal: if our cached `sheet_title` is stale (e.g. user
+            # renamed the first tab), Google returns 400 "Unable to parse
+            # range". Evict the cache entry, refetch metadata, and retry once.
+            if cache_was_used and "Unable to parse range" in str(e):
+                print(f"Stale sheet metadata cache for {spreadsheet_id}, refetching")
+                _sheet_metadata_cache.pop(spreadsheet_id, None)
+                _save_metadata_cache_to_disk()
+                sheet_title, document_title = _fetch_and_cache_sheet_metadata(service, spreadsheet_id)
+                result = service.spreadsheets().values().get(
+                    spreadsheetId=spreadsheet_id,
+                    range=sheet_title,
+                ).execute()
+            else:
+                raise
+
         values = result.get('values', [])
         if not values:
             return {"error": "No data found in the spreadsheet"}
-        
-        # Convert to DataFrame
+
         df = pd.DataFrame(values[1:], columns=values[0])
-        
-        # Convert to CSV string
         csv_data = df.to_csv(index=False)
-        
+
+        print(f"[timing fetch_spreadsheet_data] TOTAL: {(time.perf_counter() - t_total_start) * 1000:.1f} ms")
         return {
             "success": True,
             "csv_data": csv_data,
@@ -332,13 +485,12 @@ def fetch_spreadsheet_data(url):
 
 def parse_registration_data(csv_data):
     """Parse registration data from CSV."""
+    t_total_start = time.perf_counter()
     try:
         df = pd.read_csv(StringIO(csv_data))
-        
-        # Get default nationality from config
+
         default_nationality = config.get("registration", {}).get("default_nationality", "SVK")
-        
-        # Identify columns
+
         name_col = next((col for col in df.columns if "name" in col.lower() or "meno" in col.lower()), None)
         surname_col = next((col for col in df.columns if "surname" in col.lower() or "priezvisko" in col.lower()), None)
         ws_id_col = next((col for col in df.columns if "world" in col.lower() and "id" in col.lower()), None)
@@ -350,15 +502,13 @@ def parse_registration_data(csv_data):
         club_col = next((col for col in df.columns if "club" in col.lower() or "klub" in col.lower()), None)
         email_col = next((col for col in df.columns if "email" in col.lower()), None)
         timestamp_col = next((col for col in df.columns if "timestamp" in col.lower()), None)
-        
-        # Get unique disciplines
+
         all_disciplines = []
         if disciplines_col:
             for disciplines in df[disciplines_col].dropna():
                 all_disciplines.extend([d.strip() for d in str(disciplines).split(',')])
         unique_disciplines = sorted(list(set(all_disciplines)))
-        
-        # Process data
+
         skaters = []
         for _, row in df.iterrows():
             # Process World Skate ID
@@ -393,7 +543,8 @@ def parse_registration_data(csv_data):
                 "timestamp": row.get(timestamp_col, "") if timestamp_col else ""
             }
             skaters.append(skater)
-        
+
+        print(f"[timing parse_registration_data] TOTAL: {(time.perf_counter() - t_total_start) * 1000:.1f} ms")
         return {
             "success": True,
             "skaters": skaters,

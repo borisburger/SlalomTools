@@ -30,7 +30,9 @@ except FileNotFoundError:
 # Microsoft Graph settings
 AUTHORITY = "https://login.microsoftonline.com/common"
 SCOPES = ["Files.Read", "Files.Read.All"]
-TOKEN_CACHE_FILE = "token_cache.json"
+TOKEN_CACHE_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "cache", "token_cache.json"
+)
 
 # Authentication state
 auth_state = {"flow": None, "token": None, "expires_at": 0, "is_authenticated": False}

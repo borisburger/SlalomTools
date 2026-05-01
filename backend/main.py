@@ -15,7 +15,16 @@ from openpyxl import load_workbook
 import requests
 import msal
 # Import the Google Sheets module
-from google_sheets import initiate_auth_flow, complete_auth_flow, get_credentials, fetch_spreadsheet_data, parse_registration_data
+from google_sheets import (
+    initiate_auth_flow,
+    complete_auth_flow,
+    get_credentials,
+    fetch_spreadsheet_data,
+    parse_registration_data,
+    extract_spreadsheet_id_from_url,
+    get_cached_registration_data,
+    set_cached_registration_data,
+)
 # Import rankings module
 from rankings import fetch_rankings, get_latest_rankings_folder, format_date_for_folder, find_latest_archive_date, get_discipline_file_path, get_download_progress, fetch_skater_database, get_skater_db_progress
 import csv
@@ -37,7 +46,20 @@ DEFAULT_DATA_FILE = os.path.join(BASE_DIR, config["paths"]["default_data_file"])
 DEFAULT_BACKGROUND_NAME = config["paths"]["default_background_image"]
 FRONTEND_PUBLIC_DIR = os.path.join(os.path.dirname(BASE_DIR), "frontend", "public")
 BACKGROUND_IMAGE_PATH = os.path.join(FRONTEND_PUBLIC_DIR, "backgrounds", DEFAULT_BACKGROUND_NAME)
-TOKEN_CACHE_FILE = os.path.join(BASE_DIR, "token_cache.json")
+CACHE_DIR = os.path.join(BASE_DIR, "cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+TOKEN_CACHE_FILE = os.path.join(CACHE_DIR, "token_cache.json")
+
+# One-time migration: if the legacy cache file is still in `backend/`, move
+# it into `backend/cache/` so users keep their cached token across the
+# refactor.
+_legacy_token_cache = os.path.join(BASE_DIR, "token_cache.json")
+if os.path.exists(_legacy_token_cache) and not os.path.exists(TOKEN_CACHE_FILE):
+    try:
+        os.replace(_legacy_token_cache, TOKEN_CACHE_FILE)
+        print(f"Migrated cache file: token_cache.json -> cache/token_cache.json")
+    except Exception as e:
+        print(f"Failed to migrate token_cache.json: {e}")
 
 # Ensure static directory exists
 os.makedirs(STATIC_DIR, exist_ok=True)
@@ -1306,38 +1328,183 @@ async def google_auth_status():
         print(error_msg)
         return JSONResponse(status_code=500, content={"error": error_msg})
 
+async def _fetch_parse_and_cache_registration(url: str, spreadsheet_id: str):
+    """Fetch from Google, parse, save to disk cache, populate `reg_state`.
+
+    Returns the cached payload dict (the same shape that's stored on disk),
+    or a JSONResponse on error.
+    """
+    sheet_data = await asyncio.to_thread(fetch_spreadsheet_data, url)
+    if "error" in sheet_data:
+        return JSONResponse(status_code=400, content={"error": sheet_data["error"]})
+
+    result = await asyncio.to_thread(parse_registration_data, sheet_data["csv_data"])
+    if "error" in result:
+        return JSONResponse(status_code=400, content={"error": result["error"]})
+
+    document_title = sheet_data.get("document_title", "Google Sheet")
+    cached_at = datetime.utcnow().isoformat() + "Z"
+    payload = {
+        "skaters": result["skaters"],
+        "disciplines": result["disciplines"],
+        "document_title": document_title,
+        "cached_at": cached_at,
+    }
+    set_cached_registration_data(spreadsheet_id, payload)
+
+    reg_state["current_sheet_url"] = url
+    reg_state["disciplines"] = result["disciplines"]
+    reg_state["skaters"] = result["skaters"]
+
+    return payload
+
+
+def _load_response(payload: dict, *, from_cache: bool) -> dict:
+    """Build the standard /registration/load response shape from a cached payload."""
+    return {
+        "success": True,
+        "from_cache": from_cache,
+        "cached_at": payload["cached_at"],
+        "message": (
+            f"Loaded {len(payload['skaters'])} skaters with "
+            f"{len(payload['disciplines'])} disciplines"
+            + (" from cache" if from_cache else "")
+        ),
+        "disciplines": payload["disciplines"],
+        "skaters_count": len(payload["skaters"]),
+        "document_title": payload.get("document_title", "Google Sheet"),
+    }
+
+
 @app.post("/registration/load")
 async def load_registration(source: dict):
-    """Load registration data from Google Sheets."""
+    """Load registration data, preferring the local disk cache.
+
+    If the spreadsheet is in the cache, the response is returned in ~10-50 ms
+    and `from_cache: true` is included. The caller can then optionally call
+    `/registration/check-stale` to verify the cache against Google in the
+    background and surface a "data has been updated" indicator in the UI.
+    On a cache miss, this falls back to fetching from Google as before.
+    """
+    t_total_start = time.perf_counter()
     url = source.get("url")
     if not url:
         return JSONResponse(status_code=400, content={"error": "No URL provided"})
-    
+
     try:
-        # Fetch data from Google Sheets
-        sheet_data = fetch_spreadsheet_data(url)
-        if "error" in sheet_data:
-            return JSONResponse(status_code=400, content={"error": sheet_data["error"]})
-        
-        # Parse registration data
-        result = parse_registration_data(sheet_data["csv_data"])
-        if "error" in result:
-            return JSONResponse(status_code=400, content={"error": result["error"]})
-        
-        # Update registration state
-        reg_state["current_sheet_url"] = url
-        reg_state["disciplines"] = result["disciplines"]
-        reg_state["skaters"] = result["skaters"]
-        
-        return {
-            "success": True,
-            "message": f"Successfully loaded {len(result['skaters'])} skaters with {len(result['disciplines'])} disciplines",
-            "disciplines": result["disciplines"],
-            "skaters_count": len(result["skaters"]),
-            "document_title": sheet_data.get("document_title", "Google Sheet")
-        }
+        spreadsheet_id = extract_spreadsheet_id_from_url(url)
+        if not spreadsheet_id:
+            return JSONResponse(status_code=400, content={"error": "Invalid Google Sheets URL"})
+
+        cached = get_cached_registration_data(spreadsheet_id)
+        if cached:
+            reg_state["current_sheet_url"] = url
+            reg_state["disciplines"] = cached["disciplines"]
+            reg_state["skaters"] = cached["skaters"]
+            print(f"[timing /registration/load] TOTAL: {(time.perf_counter() - t_total_start) * 1000:.1f} ms (cache hit)")
+            return _load_response(cached, from_cache=True)
+
+        result = await _fetch_parse_and_cache_registration(url, spreadsheet_id)
+        if isinstance(result, JSONResponse):
+            return result
+
+        print(f"[timing /registration/load] TOTAL: {(time.perf_counter() - t_total_start) * 1000:.1f} ms (fresh fetch)")
+        return _load_response(result, from_cache=False)
     except Exception as e:
         error_msg = f"Failed to load registration data: {str(e)}"
+        print(error_msg)
+        return JSONResponse(status_code=500, content={"error": error_msg})
+
+
+@app.post("/registration/refresh")
+async def refresh_registration(source: dict):
+    """Force-refresh registration data from Google, bypassing the cache."""
+    t_total_start = time.perf_counter()
+    url = source.get("url")
+    if not url:
+        return JSONResponse(status_code=400, content={"error": "No URL provided"})
+
+    try:
+        spreadsheet_id = extract_spreadsheet_id_from_url(url)
+        if not spreadsheet_id:
+            return JSONResponse(status_code=400, content={"error": "Invalid Google Sheets URL"})
+
+        result = await _fetch_parse_and_cache_registration(url, spreadsheet_id)
+        if isinstance(result, JSONResponse):
+            return result
+
+        print(f"[timing /registration/refresh] TOTAL: {(time.perf_counter() - t_total_start) * 1000:.1f} ms")
+        return _load_response(result, from_cache=False)
+    except Exception as e:
+        error_msg = f"Failed to refresh registration data: {str(e)}"
+        print(error_msg)
+        return JSONResponse(status_code=500, content={"error": error_msg})
+
+
+@app.post("/registration/check-stale")
+async def check_registration_stale(source: dict):
+    """Check whether the Google Sheet has changed since the cache was saved.
+
+    Refetches the sheet from Google, compares parsed contents with the disk
+    cache. If different, updates the disk cache (so subsequent calls to
+    `/registration/load` will return fresh data). Does NOT update the
+    in-memory `reg_state` — the user keeps seeing whatever was loaded until
+    they explicitly refresh.
+
+    Returns: { is_stale, has_cache, cached_at, previous_cached_at? }
+    """
+    t_total_start = time.perf_counter()
+    url = source.get("url")
+    if not url:
+        return JSONResponse(status_code=400, content={"error": "No URL provided"})
+
+    try:
+        spreadsheet_id = extract_spreadsheet_id_from_url(url)
+        if not spreadsheet_id:
+            return JSONResponse(status_code=400, content={"error": "Invalid Google Sheets URL"})
+
+        cached = get_cached_registration_data(spreadsheet_id)
+        if not cached:
+            return {
+                "is_stale": False,
+                "has_cache": False,
+                "message": "No cached data to compare against",
+            }
+
+        sheet_data = await asyncio.to_thread(fetch_spreadsheet_data, url)
+        if "error" in sheet_data:
+            return JSONResponse(status_code=400, content={"error": sheet_data["error"]})
+
+        result = await asyncio.to_thread(parse_registration_data, sheet_data["csv_data"])
+        if "error" in result:
+            return JSONResponse(status_code=400, content={"error": result["error"]})
+
+        is_stale = (
+            result["skaters"] != cached["skaters"]
+            or result["disciplines"] != cached["disciplines"]
+        )
+
+        cached_at = cached["cached_at"]
+        if is_stale:
+            cached_at = datetime.utcnow().isoformat() + "Z"
+            set_cached_registration_data(spreadsheet_id, {
+                "skaters": result["skaters"],
+                "disciplines": result["disciplines"],
+                "document_title": sheet_data.get(
+                    "document_title", cached.get("document_title", "Google Sheet")
+                ),
+                "cached_at": cached_at,
+            })
+
+        print(f"[timing /registration/check-stale] TOTAL: {(time.perf_counter() - t_total_start) * 1000:.1f} ms (is_stale={is_stale})")
+        return {
+            "is_stale": is_stale,
+            "has_cache": True,
+            "cached_at": cached_at,
+            "previous_cached_at": cached["cached_at"],
+        }
+    except Exception as e:
+        error_msg = f"Failed to check registration staleness: {str(e)}"
         print(error_msg)
         return JSONResponse(status_code=500, content={"error": error_msg})
 
