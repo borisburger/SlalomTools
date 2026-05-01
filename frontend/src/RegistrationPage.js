@@ -63,6 +63,12 @@ const getAgePresets = () => {
       minYear: CURRENT_YEAR - 14, // Oldest: turning 14 this year
       maxYear: CURRENT_YEAR - 10  // Youngest: turning 10 this year
     },
+    "juniors_1_14": {
+      name: "Juniors 1-14",
+      // Kids 1-14 years old this year (no lower age limit)
+      minYear: CURRENT_YEAR - 14, // Oldest: turning 14 this year
+      maxYear: null               // No lower age limit (allows very young kids)
+    },
     "juniors_u19": {
       name: "Juniors U19",
       // Teens 15-18 years old this year

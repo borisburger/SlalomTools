@@ -13,5 +13,8 @@
         "publicDisplayLimit": 8
     },
     "default_excel_url": "https://1drv.ms/x/c/030ab5aec14c86ea/EZpmTzicDuJPtUiu8oyL2toBkGxvGfv7vP41jSqIMUcFSA?e=wizGIS",
-    "worldSkateRankingsUrl": "https://app-69b8883b-99d4-4935-9b2b-704880862424.cleverapps.io"
+    "worldSkateRankingsUrl": "https://app-69b8883b-99d4-4935-9b2b-704880862424.cleverapps.io",
+    "registration": {
+        "default_nationality": "SVK"
+    }
 } 

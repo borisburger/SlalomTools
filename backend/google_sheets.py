@@ -13,6 +13,11 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import requests
 
+# Load configuration
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+with open(CONFIG_FILE) as f:
+    config = json.load(f)
+
 # Constants
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets.readonly',
@@ -330,6 +335,9 @@ def parse_registration_data(csv_data):
     try:
         df = pd.read_csv(StringIO(csv_data))
         
+        # Get default nationality from config
+        default_nationality = config.get("registration", {}).get("default_nationality", "SVK")
+        
         # Identify columns
         name_col = next((col for col in df.columns if "name" in col.lower() or "meno" in col.lower()), None)
         surname_col = next((col for col in df.columns if "surname" in col.lower() or "priezvisko" in col.lower()), None)
@@ -368,7 +376,7 @@ def parse_registration_data(csv_data):
             
             # Process sex
             sex = row.get(sex_col, "") if sex_col else ""
-            sex_code = "F" if sex and ("female" in sex.lower() or "žensk" in sex.lower()) else "M"
+            sex_code = "F" if sex and ("female" in sex.lower() or sex.lower().startswith("žen") or sex.lower() == "f") else "M"
             
             skater = {
                 "name": row.get(name_col, "") if name_col else "",
@@ -377,7 +385,7 @@ def parse_registration_data(csv_data):
                 "world_skate_id": ws_id if is_valid_ws_id else "",
                 "dob": row.get(dob_col, "") if dob_col else "",
                 "sex": sex_code,
-                "nationality": row.get(nationality_col, "") if nationality_col else "",
+                "nationality": row.get(nationality_col, "") if nationality_col else default_nationality,
                 "disciplines": disciplines,
                 "phone": row.get(phone_col, "") if phone_col else "",
                 "club": row.get(club_col, "") if club_col else "",
