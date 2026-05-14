@@ -491,6 +491,9 @@ def parse_registration_data(csv_data):
 
         default_nationality = config.get("registration", {}).get("default_nationality", "SVK")
 
+        # Drop columns with blank headers (pandas reads them as NaN floats)
+        df = df.loc[:, df.columns.map(lambda c: isinstance(c, str))]
+
         name_col = next((col for col in df.columns if "name" in col.lower() or "meno" in col.lower()), None)
         surname_col = next((col for col in df.columns if "surname" in col.lower() or "priezvisko" in col.lower()), None)
         ws_id_col = next((col for col in df.columns if "world" in col.lower() and "id" in col.lower()), None)
@@ -509,38 +512,49 @@ def parse_registration_data(csv_data):
                 all_disciplines.extend([d.strip() for d in str(disciplines).split(',')])
         unique_disciplines = sorted(list(set(all_disciplines)))
 
+        def _cell(col, fallback=""):
+            """Return a cell value as a string, converting pandas NaN to fallback."""
+            if col is None:
+                return fallback
+            val = row.get(col, fallback)
+            if pd.isna(val):
+                return fallback
+            return str(val)
+
         skaters = []
         for _, row in df.iterrows():
             # Process World Skate ID
-            ws_id = str(row.get(ws_id_col, "")) if ws_id_col else ""
+            ws_id = _cell(ws_id_col)
             is_valid_ws_id = False
-            if ws_id and ws_id != "nan" and ws_id != "NEW":
-                # Check if it follows the World Skate ID pattern
+            if ws_id and ws_id != "NEW":
                 ws_id_pattern = r'^[12]\d{4}[A-Z]{3}\d+'
                 is_valid_ws_id = bool(re.match(ws_id_pattern, ws_id))
             
             # Process disciplines
             disciplines = []
-            if disciplines_col and row.get(disciplines_col):
-                disciplines = [d.strip() for d in str(row.get(disciplines_col)).split(',')]
+            disc_val = _cell(disciplines_col)
+            if disc_val:
+                disciplines = [d.strip() for d in disc_val.split(',')]
             
             # Process sex
-            sex = row.get(sex_col, "") if sex_col else ""
+            sex = _cell(sex_col)
             sex_code = "F" if sex and ("female" in sex.lower() or sex.lower().startswith("žen") or sex.lower() == "f") else "M"
             
+            name = _cell(name_col)
+            surname = _cell(surname_col)
             skater = {
-                "name": row.get(name_col, "") if name_col else "",
-                "surname": row.get(surname_col, "") if surname_col else "",
-                "full_name": f"{row.get(surname_col, '')} {row.get(name_col, '')}" if surname_col and name_col else "",
+                "name": name,
+                "surname": surname,
+                "full_name": f"{surname} {name}" if surname_col and name_col else "",
                 "world_skate_id": ws_id if is_valid_ws_id else "",
-                "dob": row.get(dob_col, "") if dob_col else "",
+                "dob": _cell(dob_col),
                 "sex": sex_code,
-                "nationality": row.get(nationality_col, "") if nationality_col else default_nationality,
+                "nationality": _cell(nationality_col, default_nationality),
                 "disciplines": disciplines,
-                "phone": row.get(phone_col, "") if phone_col else "",
-                "club": row.get(club_col, "") if club_col else "",
-                "email": row.get(email_col, "") if email_col else "",
-                "timestamp": row.get(timestamp_col, "") if timestamp_col else ""
+                "phone": _cell(phone_col),
+                "club": _cell(club_col),
+                "email": _cell(email_col),
+                "timestamp": _cell(timestamp_col),
             }
             skaters.append(skater)
 
