@@ -523,6 +523,11 @@ def parse_registration_data(csv_data):
 
         skaters = []
         for _, row in df.iterrows():
+            name = _cell(name_col).strip()
+            surname = _cell(surname_col).strip()
+            if not name and not surname:
+                continue
+
             # Process World Skate ID
             ws_id = _cell(ws_id_col)
             is_valid_ws_id = False
@@ -540,8 +545,6 @@ def parse_registration_data(csv_data):
             sex = _cell(sex_col)
             sex_code = "F" if sex and ("female" in sex.lower() or sex.lower().startswith("žen") or sex.lower() == "f") else "M"
             
-            name = _cell(name_col)
-            surname = _cell(surname_col)
             skater = {
                 "name": name,
                 "surname": surname,
