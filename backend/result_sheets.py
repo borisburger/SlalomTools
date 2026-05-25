@@ -27,9 +27,9 @@ except FileNotFoundError:
     print("Warning: secrets.json not found. OneDrive functionality will not be available.")
     secrets = {}
 
-# Microsoft Graph settings
-AUTHORITY = "https://login.microsoftonline.com/common"
-SCOPES = ["Files.Read", "Files.Read.All"]
+# Microsoft Graph settings — must match main.py so the cached token is reusable
+AUTHORITY = "https://login.microsoftonline.com/consumers"  # personal accounts
+SCOPES = ["Files.Read"]  # must match the scope used during authentication
 TOKEN_CACHE_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "cache", "token_cache.json"
 )
@@ -218,33 +218,42 @@ def list_onedrive_folder_contents(share_url: str) -> List[Dict[str, Any]]:
     print(f"Found {len(files)} files in folder")
     return files
 
-def download_excel_file(drive_id: str, item_id: str) -> bytes:
+def download_excel_file(drive_id: str, item_id: str, max_retries: int = 3) -> bytes:
     """Download an Excel file from OneDrive using drive and item IDs."""
     token = get_user_token()
-    
-    # Download content
+
     url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Cache-Control": "no-cache"
     }
-    
-    print(f"Downloading Excel file from: {url}")
-    resp = requests.get(url, headers=headers, stream=True)
-    resp.raise_for_status()
-    
-    # Read content
-    content = bytearray()
-    for chunk in resp.iter_content(chunk_size=1024*1024):
-        if chunk:
-            content.extend(chunk)
-    
-    if len(content) == 0:
-        raise Exception("Received empty file from OneDrive")
-    
-    print(f"Downloaded {len(content)} bytes")
-    return bytes(content)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"Downloading Excel file from: {url}" + (f" (attempt {attempt})" if attempt > 1 else ""))
+            resp = requests.get(url, headers=headers, stream=True, timeout=60)
+            resp.raise_for_status()
+
+            content = bytearray()
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    content.extend(chunk)
+
+            if len(content) == 0:
+                raise Exception("Received empty file from OneDrive")
+
+            print(f"Downloaded {len(content)} bytes")
+            return bytes(content)
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.Timeout) as e:
+            if attempt < max_retries:
+                wait = 2 ** attempt
+                print(f"Download failed ({e}), retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
 
 def process_excel_final_ranking(file_bytes: bytes, filename: str) -> Tuple[str, str, List[List[str]]]:
     """Process an Excel file's 'Final Ranking' sheet and extract results."""
@@ -420,41 +429,32 @@ def process_excel_final_ranking(file_bytes: bytes, filename: str) -> Tuple[str, 
             if not full_name:
                 continue
             
-            # Parse name
-            family_name, first_name = parse_name(full_name.split(), ctry)
+            # Parse name, trying all possible splits for multi-word surnames
+            family_name, first_name, reg_match = find_skater_by_full_name(full_name, ctry)
             
-            # Get World Skate ID (using original names before transliteration)
+            # Get World Skate ID
             if id_idx is not None and row[id_idx] is not None:
                 skater_id = str(row[id_idx]).strip()
+            elif reg_match:
+                skater_id = reg_match['id']
             else:
-                # Try to find ID in registration data using original names
-                skater_data = reg_data.get_all_data_by_name(family_name, first_name)
-                if skater_data:
-                    skater_id = skater_data['id']
-                else:
-                    skater_id = "N/A"
-                    print(f"Skater {full_name} ({ctry}) not found in registration list")
+                skater_id = "N/A"
+                name_codepoints = ' '.join(f'U+{ord(c):04X}' for c in full_name)
+                print(f"WARNING: Skater {full_name} ({ctry}) not found in registration list (codepoints: {name_codepoints})")
             
-            # Get birthdate (using original names before transliteration)
-            if len(skater_id) < 5:
-                print(f"Skater {full_name} does not have a proper World Skate ID, trying to find birthdate in the registration list")
-                skater_data = reg_data.get_all_data_by_name(family_name, first_name)
-                if skater_data:
-                    birthdate = skater_data['date_of_birth'].strftime(gs_dateOfBirthFormat)
+            # Get birthdate — try ID lookup first, fall back to name match
+            skater_data = reg_data.get_by_id(skater_id) if len(skater_id) >= 5 else None
+            if not skater_data and reg_match:
+                skater_data = reg_match
+            
+            if skater_data:
+                birthdateDt = skater_data['date_of_birth']
+                birthdate = birthdateDt.strftime(gs_dateOfBirthFormat) if birthdateDt else "N/A"
+                if skater_data['id'] and skater_data['id'].upper() != 'NEW':
                     skater_id = skater_data['id']
-                else:
-                    raise ValueError(f"Skater {full_name} not found in registration list")
             else:
-                skater_data = reg_data.get_by_id(skater_id)
-                if skater_data:
-                    birthdateDt = skater_data['date_of_birth']
-                    if birthdateDt is not None:
-                        birthdate = birthdateDt.strftime(gs_dateOfBirthFormat)
-                    else:
-                        birthdate = "N/A"
-                        print(f"Skater {skater_id} {full_name} does not have a birthdate in the registration list")
-                else:
-                    raise ValueError(f"Skater {full_name} not found in registration list")
+                print(f"SKIPPING: Skater {full_name} (ID: {skater_id}, {ctry}) — not in registration list")
+                continue
             
             # Apply transliteration to remove accents and special characters (for output only)
             first_name_transliterated = transliterate_text(first_name)
@@ -468,7 +468,7 @@ def process_excel_final_ranking(file_bytes: bytes, filename: str) -> Tuple[str, 
                 first_name_transliterated,
                 family_name_transliterated,
                 gender,
-                birthdate,
+                f'="{birthdate}"' if birthdate != "N/A" else birthdate,
                 ctry
             ])
         
@@ -500,7 +500,37 @@ def parse_name(name_parts: List[str], ctry: str) -> Tuple[str, str]:
         family_name = name_parts[0]
         first_name = ' '.join(name_parts[1:])
 
-    return family_name, first_name 
+    return family_name, first_name
+
+
+def find_skater_by_full_name(full_name: str, ctry: str) -> Tuple[str, str, Optional[Dict]]:
+    """Parse a full name and match it against registration data.
+
+    Tries the default parse_name split first, then all possible splits
+    for names with 3+ parts to handle multi-word surnames like
+    "Martinčová Lattová Lucia".
+
+    Returns (family_name, first_name, skater_data_or_None).
+    """
+    name_parts = full_name.split()
+    if not name_parts:
+        return "", "", None
+
+    family_name, first_name = parse_name(name_parts, ctry)
+    result = reg_data.get_all_data_by_name(family_name, first_name)
+    if result:
+        return family_name, first_name, result
+
+    if len(name_parts) >= 3:
+        for i in range(1, len(name_parts)):
+            surname_candidate = ' '.join(name_parts[:i])
+            firstname_candidate = ' '.join(name_parts[i:])
+            result = reg_data.get_all_data_by_name(surname_candidate, firstname_candidate)
+            if result:
+                return surname_candidate, firstname_candidate, result
+
+    return family_name, first_name, None
+
 
 # Extracting gender from ID
 def skater_gender_from_id(skater_id: str) -> str:
@@ -589,43 +619,30 @@ def process_csv(filepath: str) -> Tuple[str, str, List[List[str]]]:
                     data_started = True
                 full_name: str = row[name_idx].strip()
                 ctry: str = row[ctry_idx].strip()
-                family_name, first_name = parse_name(full_name.split(), ctry)
+                family_name, first_name, reg_match = find_skater_by_full_name(full_name, ctry)
                 
                 if id_idx is not None:
                     skater_id: str = row[id_idx].strip()
+                elif reg_match:
+                    skater_id = reg_match['id']
                 else:
-                    # If the ID is missing, we need to find it in the registration list using the name and surname (original names)
-                    skater_data = reg_data.get_all_data_by_name(family_name, first_name)
-                    if skater_data:
-                        skater_id = skater_data['id']
-                    else:
-                        skater_id = "N/A"
-                        print(f"Skater {full_name} ({ctry}) not found in registration list")
+                    skater_id = "N/A"
+                    name_codepoints = ' '.join(f'U+{ord(c):04X}' for c in full_name)
+                    print(f"WARNING: Skater {full_name} ({ctry}) not found in registration list (codepoints: {name_codepoints})")
 
-                if len(skater_id) < 5:
-                    print(f"Skater {full_name} does not have a proper World Skate ID, trying to find birthdate in the registration list")
-                    # If the skater does not have a proper World Skate ID, we need to find their birthdate
-                    # from the registration list using their name and surname (original names)
-                    skater_data = reg_data.get_all_data_by_name(family_name, first_name)
-                    if skater_data:
-                        birthdate = skater_data['date_of_birth'].strftime(gs_dateOfBirthFormat)
+                # Get birthdate — try ID lookup first, fall back to name match
+                skater_data = reg_data.get_by_id(skater_id) if len(skater_id) >= 5 else None
+                if not skater_data and reg_match:
+                    skater_data = reg_match
+
+                if skater_data:
+                    birthdateDt = skater_data['date_of_birth']
+                    birthdate = birthdateDt.strftime(gs_dateOfBirthFormat) if birthdateDt else "N/A"
+                    if skater_data['id'] and skater_data['id'].upper() != 'NEW':
                         skater_id = skater_data['id']
-                    else:
-                        # Could not find the skater in the registration list, this is an error
-                        raise ValueError(f"Skater {full_name} not found in registration list")
                 else:
-                    #print(f"Skater ID: {skater_id} {full_name}")
-                    skater_data = reg_data.get_by_id(skater_id)
-                    if skater_data:
-                        birthdateDt = skater_data['date_of_birth']
-                        if birthdateDt is not None:
-                            birthdate = birthdateDt.strftime(gs_dateOfBirthFormat)
-                        else:
-                            birthdate = "N/A"
-                            print(f"Skater {skater_id} {full_name} does not have a birthdate in the registration list")
-                    else:
-                        # Could not find the skater in the registration list, this is an error
-                        raise ValueError(f"Skater {full_name} not found in registration list")
+                    print(f"SKIPPING: Skater {full_name} (ID: {skater_id}, {ctry}) — not in registration list")
+                    continue
                 
                 # Apply transliteration to remove accents and special characters (for output only)
                 first_name_transliterated = transliterate_text(first_name)
@@ -639,7 +656,7 @@ def process_csv(filepath: str) -> Tuple[str, str, List[List[str]]]:
                     first_name_transliterated,
                     family_name_transliterated,
                     gender,
-                    birthdate,
+                    f'="{birthdate}"' if birthdate != "N/A" else birthdate,
                     ctry
                 ])
 

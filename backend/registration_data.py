@@ -1,4 +1,5 @@
 import csv
+import unicodedata
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
@@ -6,24 +7,32 @@ class RegistrationData:
     def __init__(self, filepath: str) -> None:
         self.skaters_by_id: Dict[str, Dict] = {}
         self.skaters_by_name: Dict[Tuple[str, str], Dict] = {}  # (surname, first_name) -> data
+        self.skaters_by_name_ascii: Dict[Tuple[str, str], Dict] = {}  # accent-stripped fallback
         self.validation_errors: List[str] = []
         self._load_data(filepath)
+
+    @staticmethod
+    def _to_ascii(text: str) -> str:
+        """Lowercase, strip accents/diacritics, collapse whitespace."""
+        nfkd = unicodedata.normalize('NFKD', text.strip().lower())
+        return ''.join(c for c in nfkd if not unicodedata.combining(c))
 
     def _parse_date(self, date_str: str) -> Optional[datetime]:
         """Parse date string in various formats to datetime object."""
         if not date_str:
             return None
-        
-        # Try different date formats (DD/MM/YYYY and M/D/YYYY)
-        formats = ['%d/%m/%Y', '%m/%d/%Y']
-        
+
+        # Google Sheets CSV export uses M/D/YYYY (US locale), so try that
+        # first.  DD/MM/YYYY and dot-separated D.M.YYYY are kept as
+        # fallbacks for manually-entered data.
+        formats = ['%m/%d/%Y', '%d/%m/%Y', '%d.%m.%Y']
+
         for fmt in formats:
             try:
                 return datetime.strptime(date_str, fmt)
             except ValueError:
                 continue
-                
-        # If all parsing attempts fail
+
         self.validation_errors.append(f"Could not parse date: {date_str}")
         return None
 
@@ -96,9 +105,20 @@ class RegistrationData:
                 if skater_data['id'] and skater_data['id'].upper() != 'NONE':
                     self.skaters_by_id[skater_data['id']] = skater_data
                 
-                # Store with surname-first convention
-                name_key = (skater_data['surname'].lower(), skater_data['first_name'].lower())
+                # Store with surname-first convention, NFC-normalized for consistent matching
+                name_key = (
+                    unicodedata.normalize('NFC', skater_data['surname'].lower()),
+                    unicodedata.normalize('NFC', skater_data['first_name'].lower()),
+                )
                 self.skaters_by_name[name_key] = skater_data
+
+                # Also store under accent-stripped key as fallback for
+                # Excel ↔ CSV Unicode mismatches
+                ascii_key = (
+                    self._to_ascii(skater_data['surname']),
+                    self._to_ascii(skater_data['first_name']),
+                )
+                self.skaters_by_name_ascii[ascii_key] = skater_data
 
     def get_validation_errors(self) -> List[str]:
         """Get list of validation errors found during data loading."""
@@ -117,7 +137,7 @@ class RegistrationData:
 
     def get_by_id(self, skater_id: str) -> Optional[Dict]:
         """Get skater data by their ID."""
-        return self.skaters_by_id.get(skater_id)
+        return self.skaters_by_id.get(skater_id.strip())
 
     def get_by_name(self, surname: str, first_name: str) -> Optional[Dict]:
         """Get skater data by their surname and first name (case insensitive).
@@ -129,8 +149,18 @@ class RegistrationData:
         Returns:
             Dictionary containing skater data if found, None otherwise
         """
-        name_key = (surname.lower(), first_name.lower())
-        return self.skaters_by_name.get(name_key)
+        name_key = (
+            unicodedata.normalize('NFC', surname.strip().lower()),
+            unicodedata.normalize('NFC', first_name.strip().lower()),
+        )
+        result = self.skaters_by_name.get(name_key)
+        if result:
+            return result
+
+        # Fallback: match after stripping all accents/diacritics so that
+        # different Unicode representations of the same character still match
+        ascii_key = (self._to_ascii(surname), self._to_ascii(first_name))
+        return self.skaters_by_name_ascii.get(ascii_key)
 
     def get_date_of_birth(self, skater_id: str, format: str = '%d/%m/%Y') -> Optional[str]:
         """Get skater's date of birth by their ID.
